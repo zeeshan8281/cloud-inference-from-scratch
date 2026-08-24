@@ -39,7 +39,7 @@ def rms_norm(hidden: Any, weight: Any, eps: float) -> Any:
     x = hidden.to(_torch.float32)
     variance = x.pow(2).mean(dim=-1, keepdim=True)
     x = x * _torch.rsqrt(variance + eps)
-    return (weight.to(_torch.float32) * x).to(dtype)
+    return weight * x.to(dtype)
 
 
 def build_rope_cache(head_dim: int, max_len: int, theta: float, device: str) -> tuple[Any, Any]:
@@ -65,11 +65,9 @@ def apply_rope(
     positions: Any,
 ) -> tuple[Any, Any]:
     """Rotate q/k of shape [seq, heads, head_dim] with RoPE at given positions."""
-    cos_row = cos[positions][:, None, :]  # [seq, 1, head_dim]
-    sin_row = sin[positions][:, None, :]
-    q_out = (q.to(_torch.float32) * cos_row) + (rotate_half(q.to(_torch.float32)) * sin_row)
-    k_out = (k.to(_torch.float32) * cos_row) + (rotate_half(k.to(_torch.float32)) * sin_row)
-    return q_out.to(q.dtype), k_out.to(k.dtype)
+    cos_row = cos[positions][:, None, :].to(q.dtype)  # [seq, 1, head_dim]
+    sin_row = sin[positions][:, None, :].to(q.dtype)
+    return (q * cos_row) + (rotate_half(q) * sin_row), (k * cos_row) + (rotate_half(k) * sin_row)
 
 
 def causal_attention(
@@ -87,12 +85,15 @@ def causal_attention(
     """
     query_len, num_heads, head_dim = q.shape
     key_len = keys.shape[0]
-    scores = _torch.einsum("thd,shd->hts", q, keys) * sm_scale  # [H, Tq, Tk]
+    q_heads = q.transpose(0, 1)
+    key_heads = keys.transpose(0, 1)
+    value_heads = values.transpose(0, 1)
+    scores = _torch.matmul(q_heads, key_heads.transpose(1, 2)) * sm_scale
     positions_q = _torch.arange(query_len, device=q.device) + past_len
     allowed = positions_q[:, None] >= _torch.arange(key_len, device=q.device)[None, :]
     scores = scores.to(_torch.float32).masked_fill(~allowed[None, :, :], float("-inf"))
     probs = _torch.softmax(scores, dim=-1).to(values.dtype)
-    context = _torch.einsum("hts,shd->thd", probs, values)
+    context = _torch.matmul(probs, value_heads).transpose(0, 1).contiguous()
     return context.reshape(query_len, num_heads * head_dim)
 
 
