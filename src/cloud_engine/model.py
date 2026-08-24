@@ -33,6 +33,7 @@ class ModelDims:
     vocab_size: int
     rms_norm_eps: float
     rope_theta: float
+    attention_bias: bool
     tie_word_embeddings: bool
     eos_token_id: int
 
@@ -67,6 +68,7 @@ class ModelDims:
             vocab_size=config["vocab_size"],
             rms_norm_eps=config["rms_norm_eps"],
             rope_theta=config["rope_theta"],
+            attention_bias=config.get("attention_bias", True),
             tie_word_embeddings=config["tie_word_embeddings"],
             eos_token_id=config["eos_token_id"],
         )
@@ -75,9 +77,15 @@ class ModelDims:
 class Qwen2MLP(nn.Module):
     def __init__(self, dims: ModelDims, dtype: Any, device: str) -> None:
         super().__init__()
-        self.gate_proj = nn.Linear(dims.hidden_size, dims.intermediate_size, bias=False, dtype=dtype, device=device)
-        self.up_proj = nn.Linear(dims.hidden_size, dims.intermediate_size, bias=False, dtype=dtype, device=device)
-        self.down_proj = nn.Linear(dims.intermediate_size, dims.hidden_size, bias=False, dtype=dtype, device=device)
+        self.gate_proj = nn.Linear(
+            dims.hidden_size, dims.intermediate_size, bias=False, dtype=dtype, device=device
+        )
+        self.up_proj = nn.Linear(
+            dims.hidden_size, dims.intermediate_size, bias=False, dtype=dtype, device=device
+        )
+        self.down_proj = nn.Linear(
+            dims.intermediate_size, dims.hidden_size, bias=False, dtype=dtype, device=device
+        )
 
     def forward(self, x: Any) -> Any:
         return self.down_proj(nn.functional.silu(self.gate_proj(x)) * self.up_proj(x))
@@ -86,10 +94,30 @@ class Qwen2MLP(nn.Module):
 class Qwen2Attention(nn.Module):
     def __init__(self, dims: ModelDims, dtype: Any, device: str) -> None:
         super().__init__()
-        self.q_proj = nn.Linear(dims.hidden_size, dims.num_heads * dims.head_dim, bias=False, dtype=dtype, device=device)
-        self.k_proj = nn.Linear(dims.hidden_size, dims.num_kv_heads * dims.head_dim, bias=False, dtype=dtype, device=device)
-        self.v_proj = nn.Linear(dims.hidden_size, dims.num_kv_heads * dims.head_dim, bias=False, dtype=dtype, device=device)
-        self.o_proj = nn.Linear(dims.num_heads * dims.head_dim, dims.hidden_size, bias=False, dtype=dtype, device=device)
+        self.q_proj = nn.Linear(
+            dims.hidden_size,
+            dims.num_heads * dims.head_dim,
+            bias=dims.attention_bias,
+            dtype=dtype,
+            device=device,
+        )
+        self.k_proj = nn.Linear(
+            dims.hidden_size,
+            dims.num_kv_heads * dims.head_dim,
+            bias=dims.attention_bias,
+            dtype=dtype,
+            device=device,
+        )
+        self.v_proj = nn.Linear(
+            dims.hidden_size,
+            dims.num_kv_heads * dims.head_dim,
+            bias=dims.attention_bias,
+            dtype=dtype,
+            device=device,
+        )
+        self.o_proj = nn.Linear(
+            dims.num_heads * dims.head_dim, dims.hidden_size, bias=False, dtype=dtype, device=device
+        )
 
     def project(self, x: Any) -> tuple[Any, Any, Any]:
         seq_len = x.shape[0]
@@ -126,12 +154,18 @@ class Qwen2CausalLM(nn.Module):
     """Engine-owned Qwen2 model. Module names intentionally mirror HF so the
     explicit loader can map safetensors keys one-to-one."""
 
-    def __init__(self, dims: ModelDims, attn_backend: AttentionBackend, dtype: Any, device: str) -> None:
+    def __init__(
+        self, dims: ModelDims, attn_backend: AttentionBackend, dtype: Any, device: str
+    ) -> None:
         super().__init__()
         self.dims = dims
         self.attn_backend = attn_backend
-        self.embed_tokens = nn.Embedding(dims.vocab_size, dims.hidden_size, dtype=dtype, device=device)
-        self.layers = nn.ModuleList(Qwen2DecoderLayer(dims, dtype, device) for _ in range(dims.num_layers))
+        self.embed_tokens = nn.Embedding(
+            dims.vocab_size, dims.hidden_size, dtype=dtype, device=device
+        )
+        self.layers = nn.ModuleList(
+            Qwen2DecoderLayer(dims, dtype, device) for _ in range(dims.num_layers)
+        )
         self.norm = Qwen2RMSNorm(dims, dtype, device)
         if not dims.tie_word_embeddings:
             raise ValueError("v1 requires tied word embeddings (Qwen2.5-0.5B)")
@@ -155,9 +189,7 @@ class Qwen2CausalLM(nn.Module):
         self._ensure_rope(str(device))
         seq_len = input_ids.shape[0]
         first_position = ctx.kv_start if ctx is not None else 0
-        positions = (
-            _torch.arange(first_position, first_position + seq_len, device=device)
-        )
+        positions = _torch.arange(first_position, first_position + seq_len, device=device)
         hidden = self.embed_tokens(input_ids)
         for layer_index, layer in enumerate(self.layers):
             residual = hidden
@@ -171,7 +203,9 @@ class Qwen2CausalLM(nn.Module):
             hidden = residual + layer.mlp(mlp_in)
         hidden = self.norm(hidden)
         selected = hidden if return_all_logits else hidden[-1:]
-        logits = _torch.mm(selected.to(_torch.float32), self.embed_tokens.weight.to(_torch.float32).t())
+        logits = _torch.mm(
+            selected.to(_torch.float32), self.embed_tokens.weight.to(_torch.float32).t()
+        )
         return logits
 
 

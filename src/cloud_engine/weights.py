@@ -42,16 +42,36 @@ def expected_tensors(dims: ModelDims) -> dict[str, tuple[int, ...]]:
         shapes.update(
             {
                 f"{prefix}.input_layernorm.weight": (dims.hidden_size,),
-                f"{prefix}.self_attn.q_proj.weight": (dims.num_heads * dims.head_dim, dims.hidden_size),
-                f"{prefix}.self_attn.k_proj.weight": (dims.num_kv_heads * dims.head_dim, dims.hidden_size),
-                f"{prefix}.self_attn.v_proj.weight": (dims.num_kv_heads * dims.head_dim, dims.hidden_size),
-                f"{prefix}.self_attn.o_proj.weight": (dims.hidden_size, dims.num_heads * dims.head_dim),
+                f"{prefix}.self_attn.q_proj.weight": (
+                    dims.num_heads * dims.head_dim,
+                    dims.hidden_size,
+                ),
+                f"{prefix}.self_attn.k_proj.weight": (
+                    dims.num_kv_heads * dims.head_dim,
+                    dims.hidden_size,
+                ),
+                f"{prefix}.self_attn.v_proj.weight": (
+                    dims.num_kv_heads * dims.head_dim,
+                    dims.hidden_size,
+                ),
+                f"{prefix}.self_attn.o_proj.weight": (
+                    dims.hidden_size,
+                    dims.num_heads * dims.head_dim,
+                ),
                 f"{prefix}.post_attention_layernorm.weight": (dims.hidden_size,),
                 f"{prefix}.mlp.gate_proj.weight": (dims.intermediate_size, dims.hidden_size),
                 f"{prefix}.mlp.up_proj.weight": (dims.intermediate_size, dims.hidden_size),
                 f"{prefix}.mlp.down_proj.weight": (dims.hidden_size, dims.intermediate_size),
             }
         )
+        if dims.attention_bias:
+            shapes.update(
+                {
+                    f"{prefix}.self_attn.q_proj.bias": (dims.num_heads * dims.head_dim,),
+                    f"{prefix}.self_attn.k_proj.bias": (dims.num_kv_heads * dims.head_dim,),
+                    f"{prefix}.self_attn.v_proj.bias": (dims.num_kv_heads * dims.head_dim,),
+                }
+            )
     return shapes
 
 
@@ -92,7 +112,11 @@ def load_state_dict(model_dir: Path, dims: ModelDims, dtype: Any = None) -> dict
             raise ValueError(f"shape mismatch for {name}: expected {shape}, got {actual}")
 
     target_dtype = dtype or state["model.embed_tokens.weight"].dtype
-    return {name: tensor.to(target_dtype) for name, tensor in state.items()}
+    return {
+        name.removeprefix("model."): tensor.to(target_dtype)
+        for name, tensor in state.items()
+        if name in expected
+    }
 
 
 def load_model(
