@@ -5,8 +5,6 @@ without FastAPI installed; ``create_app`` performs the web imports lazily.
 Unknown parameters and unsupported input forms are rejected, never ignored.
 """
 
-from __future__ import annotations
-
 import hmac
 import json
 import time

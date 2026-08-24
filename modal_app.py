@@ -337,6 +337,24 @@ def api_lifecycle_tests() -> str:
     print(completed.stderr)
     if completed.returncode != 0:
         raise RuntimeError("CPU test suite failed")
+
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from cloud_engine.api import create_app
+
+    engine = SimpleNamespace(
+        ready=True,
+        config=SimpleNamespace(mode="test"),
+        snapshot_metrics=lambda: {"status": "ok"},
+    )
+    with TestClient(create_app(engine, api_key="test-key", model_id=MODEL["id"])) as client:
+        assert client.get("/healthz").status_code == 200
+        assert client.get("/metrics").status_code == 401
+        assert client.get("/metrics", headers={"Authorization": "Bearer test-key"}).status_code == 200
+        assert client.post("/v1/responses", json={}).status_code == 401
+    print("FastAPI route/auth integration checks passed")
     return "cpu-tests-passed"
 
 
