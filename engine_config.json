@@ -1,0 +1,47 @@
+{
+  "model": {
+    "id": "Qwen/Qwen2.5-0.5B",
+    "revision": "060db6499f32faf8b98477b0a26969ef7d8b9987",
+    "dtype": "float16",
+    "max_model_len": 2048,
+    "max_output_tokens": 256,
+    "eos_token_id": 151643
+  },
+  "scheduler": {
+    "max_active_sequences": 16,
+    "max_queue_size": 64,
+    "max_batched_tokens": 2048,
+    "queue_timeout_seconds": 60,
+    "stream_queue_capacity": 32,
+    "slow_consumer_timeout_seconds": 10
+  },
+  "kv_cache": {
+    "block_size": 16,
+    "bytes": 4294967296
+  },
+  "modal": {
+    "app_name": "cloud-inference-lab",
+    "volume_name": "cloud-inference-model-cache",
+    "secret_name": "cloud-inference-api",
+    "gpu": "L4",
+    "timeout_seconds": 1200,
+    "scaledown_window_seconds": 60,
+    "max_containers": 1,
+    "min_containers": 0,
+    "buffer_containers": 0,
+    "max_inputs_per_container": 32
+  },
+  "image": {
+    "python_version": "3.12",
+    "torch": "2.7.1",
+    "triton": "3.3.1",
+    "transformers": "4.51.3",
+    "tokenizers": "0.21.1",
+    "safetensors": "0.5.3",
+    "huggingface_hub": "0.30.2",
+    "fastapi": "0.115.12",
+    "starlette": "0.46.2",
+    "pydantic": "2.11.5",
+    "httpx": "0.28.1"
+  }
+}

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69,<80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cloud-inference-engine-lab"
+version = "0.1.0"
+description = "Build the engine behind an LLM API without owning a GPU: KV caching, continuous batching, paged KV allocation, scheduling, streaming, and a Triton attention kernel executed on Modal."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Cloud Inference Engine Lab contributors" }]
+# Intentionally empty: the local install stays lightweight (PRD G2).
+# Torch/Triton/FastAPI live only inside the Modal image defined in modal_app.py.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["ruff>=0.6"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
