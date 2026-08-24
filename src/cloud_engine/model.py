@@ -19,7 +19,14 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise RuntimeError("model.py requires torch (cloud image only)") from exc
 
-from .attention import AttentionBackend, StepContext, apply_rope, build_rope_cache, rms_norm
+from .attention import (
+    AttentionBackend,
+    PackedContext,
+    StepContext,
+    apply_rope,
+    build_rope_cache,
+    rms_norm,
+)
 
 
 @dataclass(frozen=True)
@@ -182,15 +189,19 @@ class Qwen2CausalLM(nn.Module):
     def forward(
         self,
         input_ids: Any,
-        ctx: StepContext | None,
+        ctx: StepContext | PackedContext | None,
         return_all_logits: bool = False,
+        logit_indices: Any | None = None,
     ) -> Any:
         """input_ids: [seq] LongTensor on device. Returns logits [seq', vocab] fp32."""
         device = input_ids.device
         self._ensure_rope(str(device))
         seq_len = input_ids.shape[0]
-        first_position = ctx.kv_start if ctx is not None else 0
-        positions = _torch.arange(first_position, first_position + seq_len, device=device)
+        if isinstance(ctx, PackedContext):
+            positions = ctx.positions
+        else:
+            first_position = ctx.kv_start if ctx is not None else 0
+            positions = _torch.arange(first_position, first_position + seq_len, device=device)
         hidden = self.embed_tokens(input_ids)
         for layer_index, layer in enumerate(self.layers):
             residual = hidden
@@ -203,7 +214,10 @@ class Qwen2CausalLM(nn.Module):
             mlp_in = layer.post_attention_layernorm(hidden)
             hidden = residual + layer.mlp(mlp_in)
         hidden = self.norm(hidden)
-        selected = hidden if return_all_logits else hidden[-1:]
+        if logit_indices is not None:
+            selected = hidden.index_select(0, logit_indices)
+        else:
+            selected = hidden if return_all_logits else hidden[-1:]
         logits = _torch.mm(
             selected.to(_torch.float32), self.embed_tokens.weight.to(_torch.float32).t()
         )

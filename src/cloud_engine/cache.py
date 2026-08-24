@@ -227,10 +227,10 @@ class PagedKVCache:
     """Shared physical KV block pools addressed through per-request block tables.
 
     Layout (PRD FR6): ``[num_layers, num_blocks, block_size, num_kv_heads, head_dim]``
-    for each of K and V. Admission reserves the worst-case block count up front
-    so no active sequence can ever OOM mid-generation without eviction (which is
-    out of scope in v1). The tradeoff — reserved-but-unused bytes — is exactly
-    what the fragmentation benchmark measures.
+    for each of K and V. Legacy paged modes reserve worst-case capacity through
+    ``reserve``. The ragged engine admits empty tables and grows them with
+    ``ensure_capacity_batch`` so a scheduler iteration either acquires every
+    required block or changes nothing.
     """
 
     kind = "paged"
@@ -279,6 +279,70 @@ class PagedKVCache:
         self._tables[request_id] = self.allocator.allocate(request_id, needed)
         self._length[request_id] = 0
 
+    def ensure_capacity_batch(self, required_tokens: dict[str, int]) -> None:
+        """Transactionally grow several block tables to their required lengths."""
+        additions: dict[str, int] = {}
+        for request_id, tokens in required_tokens.items():
+            if request_id not in self._tables:
+                raise KeyError(f"request {request_id!r} has no block table")
+            required_blocks = self.allocator.blocks_for(tokens)
+            additions[request_id] = max(0, required_blocks - len(self._tables[request_id]))
+        total = sum(additions.values())
+        if not self.allocator.can_satisfy(total):
+            raise CacheCapacityFull(
+                f"need {total} additional blocks, {self.allocator.free_count} free"
+            )
+
+        allocated: dict[str, list[int]] = {}
+        try:
+            for request_id, count in additions.items():
+                if count:
+                    allocated[request_id] = self.allocator.allocate(request_id, count)
+            for request_id, block_ids in allocated.items():
+                self._tables[request_id].extend(block_ids)
+        except Exception:
+            for request_id, block_ids in allocated.items():
+                self.allocator.free(block_ids, request_id)
+            raise
+
+    def append_slots(
+        self,
+        layer: int,
+        keys: Any,
+        values: Any,
+        slot_mapping: Any,
+    ) -> None:
+        """Write a flat packed token axis into physical cache slots."""
+        keys_view = self.key_pool[layer].view(
+            self.num_blocks * self.block_size, self.num_kv_heads, self.head_dim
+        )
+        values_view = self.value_pool[layer].view(
+            self.num_blocks * self.block_size, self.num_kv_heads, self.head_dim
+        )
+        keys_view.index_copy_(0, slot_mapping, keys.to(keys_view.dtype))
+        values_view.index_copy_(0, slot_mapping, values.to(values_view.dtype))
+
+    def slot_mapping(self, request_ids: Sequence[str], positions: Sequence[int]) -> list[int]:
+        if len(request_ids) != len(positions):
+            raise ValueError("request_ids and positions must have equal length")
+        slots: list[int] = []
+        for request_id, position in zip(request_ids, positions, strict=True):
+            table = self._tables[request_id]
+            slots.append(
+                table[position // self.block_size] * self.block_size
+                + position % self.block_size
+            )
+        return slots
+
+    def commit_lengths(self, lengths: dict[str, int]) -> None:
+        for request_id, length in lengths.items():
+            if self.allocator.blocks_for(length) > len(self._tables[request_id]):
+                raise RuntimeError(f"length {length} exceeds allocated table for {request_id}")
+            self._length[request_id] = max(self._length[request_id], length)
+
+    def allocated_tokens(self, request_id: str) -> int:
+        return len(self._tables.get(request_id, ())) * self.block_size
+
     # -- writes -------------------------------------------------------------
     def append(
         self,
@@ -303,13 +367,15 @@ class PagedKVCache:
         self._length[request_id] = max(self._length[request_id], start_pos + keys.shape[0])
 
     # -- reads ----------------------------------------------------------------
-    def view(self, request_id: str, layer: int) -> CacheView:
+    def view(self, request_id: str, layer: int, length: int | None = None) -> CacheView:
         """Gather a temporary logical tensor for reference attention.
 
         The gather exists only inside this call; the pools remain the sole
         storage. Its size is reported as ``temporary_gather_bytes`` (PRD FR6).
         """
-        seq_len = self._length[request_id]
+        seq_len = self._length[request_id] if length is None else length
+        if self.allocator.blocks_for(seq_len) > len(self._tables[request_id]):
+            raise RuntimeError(f"requested view length {seq_len} exceeds allocated block table")
         table = self._tables[request_id]
         flat_indices = [
             block_id * self.block_size + slot

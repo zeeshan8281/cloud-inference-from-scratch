@@ -102,9 +102,13 @@ class Request:
     stalled_since_ns: int | None = None
     first_token_ns: int | None = None
     last_token_ns: int | None = None
+    token_timestamps_ns: list[int] = field(default_factory=list)
     finish_reason: str = ""
     error_detail: str = ""
     rejected: bool = False
+    preemption_count: int = 0
+    recomputed_tokens: int = 0
+    recompute_until: int = 0
 
     @property
     def is_terminal(self) -> bool:
@@ -127,6 +131,40 @@ def _new_future() -> asyncio.Future:
     return loop.create_future()
 
 
+@dataclass(frozen=True)
+class BatchItem:
+    """One sequence's token slice in a shared scheduler iteration."""
+
+    request: Request
+    token_ids: tuple[int, ...]
+    start_pos: int
+    sample: bool
+    is_decode: bool
+
+    @property
+    def query_length(self) -> int:
+        return len(self.token_ids)
+
+    @property
+    def end_pos(self) -> int:
+        return self.start_pos + self.query_length
+
+
+@dataclass(frozen=True)
+class BatchPlan:
+    """Decode-first work selected under one shared token budget."""
+
+    items: tuple[BatchItem, ...]
+
+    @property
+    def token_count(self) -> int:
+        return sum(item.query_length for item in self.items)
+
+    @property
+    def request_ids(self) -> tuple[str, ...]:
+        return tuple(item.request.request_id for item in self.items)
+
+
 class Scheduler:
     """Iteration loop: reap -> decode active -> admit+prefill -> publish."""
 
@@ -147,6 +185,7 @@ class Scheduler:
         self.active: list[Request] = []
         self._task: asyncio.Task | None = None
         self._inflight: Request | None = None
+        self._inflight_ids: set[str] = set()
         self._running = False
         self._counter = 0
 
@@ -200,11 +239,17 @@ class Scheduler:
         request.assert_not_terminal()
         request.state = RequestState.CANCELLED
         request.finish_reason = "cancelled"
-        if request is not self._inflight:
+        if request is not self._inflight and request.request_id not in self._inflight_ids:
             self._finalize(request)
 
     # ------------------------------------------------------------- internals
     async def _run(self) -> None:
+        if callable(getattr(self.runner, "execute_batch", None)):
+            await self._run_packed()
+            return
+        await self._run_serial()
+
+    async def _run_serial(self) -> None:
         while self._running:
             now = self.clock()
             progressed = self._reap(now)
@@ -279,6 +324,173 @@ class Scheduler:
             self.metrics.record_iteration(processed)
             await asyncio.sleep(0 if progressed else self.idle_sleep_seconds)
 
+    async def _run_packed(self) -> None:
+        """Run decode-first packed iterations with chunked prefill."""
+        while self._running:
+            now = self.clock()
+            progressed = self._reap(now)
+            progressed = self._drain_active_streams() or progressed
+            progressed = self._admit_waiting() or progressed
+            plan = self._build_batch_plan()
+            if not plan.items:
+                await asyncio.sleep(0 if progressed else self.idle_sleep_seconds)
+                continue
+
+            try:
+                outputs = await self._execute_batch(plan)
+            except Exception as exc:
+                if bool(getattr(exc, "is_capacity_error", False)):
+                    if not self._preempt_for_capacity(plan):
+                        for item in plan.items:
+                            if not item.request.is_terminal:
+                                self._fail(
+                                    item.request,
+                                    f"KV capacity cannot fit one runnable sequence: {exc}",
+                                    rejected=True,
+                                )
+                    await asyncio.sleep(0)
+                    continue
+                for item in plan.items:
+                    if item.request.is_terminal:
+                        self._finalize(item.request)
+                    else:
+                        self._fail(item.request, f"packed forward failed: {exc}")
+                await asyncio.sleep(0)
+                continue
+
+            stamp = self.clock()
+            self.metrics.record_input_tokens(plan.token_count)
+            for item in plan.items:
+                request = item.request
+                if request.is_terminal:
+                    self._finalize(request)
+                    continue
+                token_id = outputs.get(request.request_id)
+                recomputed = max(
+                    0,
+                    min(item.end_pos, request.recompute_until) - item.start_pos,
+                )
+                if recomputed:
+                    request.recomputed_tokens += recomputed
+                    self.metrics.record_recomputed_tokens(recomputed)
+                if item.sample:
+                    if token_id is None:
+                        self._fail(request, "packed runner omitted sampled token")
+                        continue
+                    self._after_token(request, token_id, stamp)
+                else:
+                    request.state = RequestState.PREFILL
+            self.metrics.record_iteration(len(plan.items))
+            progressed = True
+            await asyncio.sleep(0 if progressed else self.idle_sleep_seconds)
+
+    def _drain_active_streams(self) -> bool:
+        progressed = False
+        for request in list(self.active):
+            if request.pending_events:
+                before = len(request.pending_events)
+                self._drain_pending(request)
+                progressed = progressed or len(request.pending_events) < before
+        return progressed
+
+    def _admit_waiting(self) -> bool:
+        progressed = False
+        limit = effective_active_limit(self.config)
+        while self.waiting and len(self.active) < limit:
+            candidate = self.waiting[0]
+            # A preempted sequence waits for the current residency set to drain;
+            # this prevents capacity thrash while preserving eventual recompute.
+            if candidate.preemption_count and self.active:
+                break
+            self.waiting.popleft()
+            try:
+                self.runner.admit(candidate)
+            except Exception as exc:
+                capacity_signal = bool(getattr(exc, "is_capacity_error", False))
+                self._fail(candidate, f"admission refused: {exc}", rejected=capacity_signal)
+                continue
+            candidate.state = RequestState.PREFILL
+            self.active.append(candidate)
+            progressed = True
+        return progressed
+
+    def _build_batch_plan(self) -> BatchPlan:
+        budget = self.config.max_batched_tokens
+        items: list[BatchItem] = []
+        eligible = [
+            request
+            for request in self.active
+            if not request.is_terminal
+            and not request.pending_events
+            and request.stalled_since_ns is None
+        ]
+
+        decode: list[Request] = []
+        prefill: list[Request] = []
+        for request in eligible:
+            known = len(request.prompt_token_ids) + request.generated_count
+            remaining = known - request.tokens_fed
+            if remaining <= 0:
+                continue
+            if request.state is RequestState.DECODING and remaining == 1:
+                decode.append(request)
+            else:
+                prefill.append(request)
+
+        decode_ids = {id(request) for request in decode}
+        for request in (*decode, *prefill):
+            if budget <= 0:
+                break
+            known_ids = request.prompt_token_ids + request.generated_token_ids
+            remaining = len(known_ids) - request.tokens_fed
+            if remaining <= 0:
+                continue
+            limit = 1 if id(request) in decode_ids else self.config.prefill_chunk_size
+            query_length = min(remaining, limit, budget)
+            start = request.tokens_fed
+            end = start + query_length
+            items.append(
+                BatchItem(
+                    request=request,
+                    token_ids=tuple(known_ids[start:end]),
+                    start_pos=start,
+                    sample=end == len(known_ids),
+                    is_decode=query_length == 1 and start >= len(request.prompt_token_ids),
+                )
+            )
+            budget -= query_length
+        return BatchPlan(tuple(items))
+
+    async def _execute_batch(self, plan: BatchPlan) -> dict[str, int]:
+        self._inflight_ids = set(plan.request_ids)
+        try:
+            return await asyncio.to_thread(self.runner.execute_batch, plan)
+        finally:
+            self._inflight_ids.clear()
+
+    def _preempt_for_capacity(self, plan: BatchPlan) -> bool:
+        candidates = [request for request in self.active if not request.is_terminal]
+        if len(candidates) <= 1:
+            return False
+        victim = max(
+            candidates,
+            key=lambda request: (
+                getattr(self.runner, "allocated_tokens", lambda _r: 0)(request),
+                request.tokens_fed,
+                request.arrival_ns,
+            ),
+        )
+        if victim in self.active:
+            self.active.remove(victim)
+        self.runner.release(victim)
+        victim.recompute_until = victim.tokens_fed
+        victim.tokens_fed = 0
+        victim.preemption_count += 1
+        victim.state = RequestState.WAITING
+        self.waiting.append(victim)
+        self.metrics.inc_preempted()
+        return True
+
     async def _step(self, request: Request) -> int:
         self._inflight = request
         try:
@@ -314,6 +526,7 @@ class Scheduler:
         else:
             self.metrics.record_itl_ms(((now - (request.last_token_ns or now)) / 1e6), now)
         request.last_token_ns = now
+        request.token_timestamps_ns.append(now)
         self.metrics.record_output_token(1, now)
 
         eos_hit = (

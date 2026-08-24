@@ -7,10 +7,19 @@
     "max_output_tokens": 256,
     "eos_token_id": 151643
   },
+  "ragged_model": {
+    "id": "Qwen/Qwen2.5-3B",
+    "revision": "3aab1f1954e9cc14eb9509a215f9e5ca08227a9b",
+    "dtype": "float16",
+    "max_model_len": 4096,
+    "max_output_tokens": 256,
+    "eos_token_id": 151643
+  },
   "scheduler": {
     "max_active_sequences": 16,
     "max_queue_size": 64,
     "max_batched_tokens": 2048,
+    "prefill_chunk_size": 256,
     "queue_timeout_seconds": 60,
     "stream_queue_capacity": 32,
     "slow_consumer_timeout_seconds": 10
@@ -42,6 +51,7 @@
     "fastapi": "0.115.12",
     "starlette": "0.46.2",
     "pydantic": "2.11.5",
-    "httpx": "0.28.1"
+    "httpx": "0.28.1",
+    "uvicorn": "0.34.2"
   }
 }

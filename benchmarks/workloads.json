@@ -48,6 +48,14 @@
       "output_tokens_min": 8,
       "output_tokens_max": 256,
       "purpose": "Measure KV allocation waste across short and long generations"
+    },
+    "online": {
+      "concurrent_requests": 32,
+      "prompt_tokens_min": 16,
+      "prompt_tokens_max": 256,
+      "output_tokens_min": 32,
+      "output_tokens_max": 32,
+      "purpose": "Drive fixed arrival-rate sweeps with heterogeneous prompt lengths"
     }
   }
 }

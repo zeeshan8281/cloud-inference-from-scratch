@@ -72,6 +72,35 @@ print(workload_hash(build_workload('mixed', Tokenizer())))
         self.assertNotEqual(workload_hash(first), workload_hash(second))
         self.assertNotIn("alpha", workload_hash(first))
 
+    def test_online_summary_reports_p99_errors_and_slo_goodput(self) -> None:
+        from benchmarks.online import _summarize
+
+        records = [
+            {
+                "ttft_ms": 100.0,
+                "itl_ms": [10.0, 20.0],
+                "e2e_ms": 200.0,
+                "output_tokens": 3,
+                "error": None,
+            },
+            {
+                "ttft_ms": 2000.0,
+                "itl_ms": [200.0],
+                "e2e_ms": 3000.0,
+                "output_tokens": 2,
+                "error": None,
+            },
+            {"output_tokens": 0, "error": "injected"},
+        ]
+        summary = _summarize(records, 2.0, [0, 1, 2], 1000.0, 100.0)
+        self.assertEqual(
+            summary["requests"],
+            {"offered": 3, "completed": 2, "errors": 1, "slo_good": 1},
+        )
+        self.assertEqual(summary["throughput"]["output_tokens_per_second"], 2.5)
+        self.assertGreater(summary["latency"]["ttft_p99_ms"], 1900)
+        self.assertEqual(summary["queue"]["max_depth"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,17 +9,24 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections import deque
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .attention import AttentionBackend, StepContext, TritonDecodeAttentionBackend
+from .attention import (
+    AttentionBackend,
+    PackedContext,
+    RaggedTritonAttentionBackend,
+    StepContext,
+    TritonDecodeAttentionBackend,
+)
 from .cache import ContiguousKVCache, PagedKVCache
 from .config import EngineConfig
 from .metrics import Metrics
 from .model import Qwen2CausalLM, greedy_sample, load_model_config
-from .scheduler import GenerationConfig, Request, RequestState, Scheduler, StreamEvent
+from .scheduler import BatchPlan, GenerationConfig, Request, RequestState, Scheduler, StreamEvent
 from .weights import load_model, load_tokenizer
 
 
@@ -33,6 +40,16 @@ class GenerationResult:
     finish_reason: str
     ttft_ms: float | None
     e2e_ms: float
+
+
+@dataclass(frozen=True)
+class PackedBatch:
+    """One flat token axis and all device metadata needed by ragged attention."""
+
+    input_ids: Any
+    context: PackedContext
+    logit_indices: Any
+    sampled_request_ids: tuple[str, ...]
 
 
 class RunnerBase:
@@ -156,6 +173,138 @@ class CachedRunner(RunnerBase):
             logits = self.model(input_ids, ctx=ctx)
         request.tokens_fed += 1
         return greedy_sample(logits)
+
+
+class RaggedRunner(RunnerBase):
+    """Pack multiple sequences into one model invocation per scheduler iteration."""
+
+    def __init__(
+        self,
+        config: EngineConfig,
+        model: Qwen2CausalLM,
+        cache: PagedKVCache,
+        device: str,
+    ) -> None:
+        super().__init__(config)
+        self.model = model
+        self.cache = cache
+        self.device = device
+        self.forward_invocations = 0
+        self.max_forward_request_count = 0
+        self.forward_traces: deque[tuple[str, ...]] = deque(maxlen=256)
+        self.forward_plans: deque[tuple[tuple[str, int, int, bool], ...]] = deque(
+            maxlen=256
+        )
+
+    def admit(self, request: Request) -> None:
+        self.cache.reserve(request.request_id, 0)
+
+    def release(self, request: Request) -> None:
+        self.cache.release(request.request_id)
+
+    def allocated_tokens(self, request: Request) -> int:
+        return self.cache.allocated_tokens(request.request_id)
+
+    def _pack(self, plan: BatchPlan) -> PackedBatch:
+        import torch
+
+        required = {item.request.request_id: item.end_pos for item in plan.items}
+        self.cache.ensure_capacity_batch(required)
+
+        input_ids: list[int] = []
+        positions: list[int] = []
+        token_request_ids: list[str] = []
+        query_seq_ids: list[int] = []
+        query_ranges: list[tuple[int, int]] = []
+        query_start_loc = [0]
+        context_lens: list[int] = []
+        final_lens: list[int] = []
+        sampled_request_ids: list[str] = []
+        logit_indices: list[int] = []
+
+        for sequence_index, item in enumerate(plan.items):
+            start = len(input_ids)
+            input_ids.extend(item.token_ids)
+            positions.extend(range(item.start_pos, item.end_pos))
+            token_request_ids.extend([item.request.request_id] * item.query_length)
+            query_seq_ids.extend([sequence_index] * item.query_length)
+            end = len(input_ids)
+            query_ranges.append((start, end))
+            query_start_loc.append(end)
+            context_lens.append(item.start_pos)
+            final_lens.append(item.end_pos)
+            if item.sample:
+                sampled_request_ids.append(item.request.request_id)
+                logit_indices.append(end - 1)
+
+        tables = [self.cache.block_table(item.request.request_id) for item in plan.items]
+        width = max((len(table) for table in tables), default=1)
+        block_tables = torch.zeros(
+            (len(tables), width), dtype=torch.int32, device=self.device
+        )
+        for row, table in enumerate(tables):
+            if table:
+                block_tables[row, : len(table)] = torch.tensor(
+                    table, dtype=torch.int32, device=self.device
+                )
+
+        slot_mapping = self.cache.slot_mapping(token_request_ids, positions)
+        context = PackedContext(
+            request_ids=tuple(item.request.request_id for item in plan.items),
+            query_ranges=tuple(query_ranges),
+            context_lens=tuple(context_lens),
+            final_lens=tuple(final_lens),
+            positions=torch.tensor(positions, dtype=torch.long, device=self.device),
+            query_start_loc=torch.tensor(
+                query_start_loc, dtype=torch.int32, device=self.device
+            ),
+            block_tables=block_tables,
+            slot_mapping=torch.tensor(slot_mapping, dtype=torch.long, device=self.device),
+            query_seq_ids=torch.tensor(
+                query_seq_ids, dtype=torch.int32, device=self.device
+            ),
+        )
+        return PackedBatch(
+            input_ids=torch.tensor(input_ids, dtype=torch.long, device=self.device),
+            context=context,
+            logit_indices=torch.tensor(logit_indices, dtype=torch.long, device=self.device),
+            sampled_request_ids=tuple(sampled_request_ids),
+        )
+
+    def execute_batch(self, plan: BatchPlan) -> dict[str, int]:
+        import torch
+
+        packed = self._pack(plan)
+        self.forward_invocations += 1
+        self.max_forward_request_count = max(
+            self.max_forward_request_count, len(plan.request_ids)
+        )
+        self.forward_traces.append(plan.request_ids)
+        self.forward_plans.append(
+            tuple(
+                (
+                    item.request.request_id,
+                    item.start_pos,
+                    item.query_length,
+                    item.sample,
+                )
+                for item in plan.items
+            )
+        )
+        logits = self.model(
+            packed.input_ids,
+            ctx=packed.context,
+            logit_indices=packed.logit_indices,
+        )
+        self.cache.commit_lengths(
+            {item.request.request_id: item.end_pos for item in plan.items}
+        )
+        for item in plan.items:
+            item.request.tokens_fed = item.end_pos
+        if not packed.sampled_request_ids:
+            return {}
+        token_ids = torch.argmax(logits.to(torch.float32), dim=-1).tolist()
+        return dict(zip(packed.sampled_request_ids, token_ids, strict=True))
 
 
 class RequestHandle:
@@ -315,7 +464,7 @@ class InferenceEngine:
             attn_backend = AttentionBackend(
                 self.cache, dims.num_heads, dims.num_kv_heads, dims.head_dim
             )
-        elif self.config.mode == "triton":
+        elif self.config.mode in ("triton", "ragged"):
             self.cache = PagedKVCache(
                 dims.num_layers,
                 dims.num_kv_heads,
@@ -325,7 +474,12 @@ class InferenceEngine:
                 dtype=dtype,
                 device=self.device,
             )
-            attn_backend = TritonDecodeAttentionBackend(
+            backend_type = (
+                RaggedTritonAttentionBackend
+                if self.config.mode == "ragged"
+                else TritonDecodeAttentionBackend
+            )
+            attn_backend = backend_type(
                 self.cache,
                 dims.num_heads,
                 dims.num_kv_heads,
@@ -337,11 +491,12 @@ class InferenceEngine:
 
         self.model, _ = load_model(self.model_dir, attn_backend, dtype=dtype, device=self.device)
         self.tokenizer = load_tokenizer(self.model_dir)
-        self.runner = (
-            NaiveRunner(self.config, self.model, self.cache, self.device)
-            if self.config.mode == "naive"
-            else CachedRunner(self.config, self.model, self.cache, self.device)
-        )
+        if self.config.mode == "naive":
+            self.runner = NaiveRunner(self.config, self.model, self.cache, self.device)
+        elif self.config.mode == "ragged":
+            self.runner = RaggedRunner(self.config, self.model, self.cache, self.device)
+        else:
+            self.runner = CachedRunner(self.config, self.model, self.cache, self.device)
         self.ready = True
 
     # ---------------------------------------------------------------- usage
@@ -382,6 +537,26 @@ class InferenceEngine:
                 self.metrics.set_kv_stats(base["kv_cache"])
             except Exception:
                 pass
+        if isinstance(self.runner, RaggedRunner):
+            base["scheduler"]["forward_invocations"] = self.runner.forward_invocations
+            base["scheduler"]["max_forward_request_count"] = (
+                self.runner.max_forward_request_count
+            )
+            base["scheduler"]["last_forward_request_ids"] = list(
+                self.runner.forward_traces[-1] if self.runner.forward_traces else ()
+            )
+            base["scheduler"]["recent_forward_plans"] = [
+                [
+                    {
+                        "request_id": request_id,
+                        "start_pos": start_pos,
+                        "query_length": query_length,
+                        "sample": sample,
+                    }
+                    for request_id, start_pos, query_length, sample in plan
+                ]
+                for plan in self.runner.forward_plans
+            ]
         if self.device == "cuda":
             import torch
 

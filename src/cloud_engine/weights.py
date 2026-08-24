@@ -20,7 +20,8 @@ MODEL_ID = "Qwen/Qwen2.5-0.5B"
 _DOWNLOAD_PATTERNS = [
     "config.json",
     "generation_config.json",
-    "model.safetensors",
+    "model*.safetensors",
+    "model.safetensors.index.json",
     "tokenizer.json",
     "tokenizer_config.json",
     "vocab.json",
@@ -143,12 +144,16 @@ def load_model(
     return model, dims
 
 
-def ensure_weights_downloaded(cache_root: str, revision: str) -> Path:
+def ensure_weights_downloaded(
+    cache_root: str,
+    revision: str,
+    model_id: str = MODEL_ID,
+) -> Path:
     """Download the pinned snapshot into the Modal Volume (idempotent)."""
     from huggingface_hub import snapshot_download
 
     local_path = snapshot_download(
-        repo_id=MODEL_ID,
+        repo_id=model_id,
         revision=revision,
         cache_dir=str(Path(cache_root) / "hf"),
         allow_patterns=_DOWNLOAD_PATTERNS,

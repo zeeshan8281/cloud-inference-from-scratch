@@ -79,6 +79,8 @@ class Metrics:
         self.iterations_total = 0
         self.input_tokens_total = 0
         self.output_tokens_total = 0
+        self.recomputed_tokens_total = 0
+        self.preempted_total = 0
         self._kv: dict[str, Any] = {}
         self._gpu: dict[str, int] = {}
 
@@ -108,6 +110,9 @@ class Metrics:
     def record_input_tokens(self, count: int) -> None:
         self.input_tokens_total += count
 
+    def record_recomputed_tokens(self, count: int) -> None:
+        self.recomputed_tokens_total += count
+
     def inc_completed(self) -> None:
         self.completed_total += 1
 
@@ -122,6 +127,9 @@ class Metrics:
 
     def inc_timed_out(self) -> None:
         self.timed_out_total += 1
+
+    def inc_preempted(self) -> None:
+        self.preempted_total += 1
 
     # -- gauges ------------------------------------------------------------
     def set_kv_stats(self, snapshot: dict[str, Any]) -> None:
@@ -147,6 +155,7 @@ class Metrics:
         self.cancelled_total = self.rejected_total = self.timed_out_total = 0
         self.iterations_total = 0
         self.input_tokens_total = self.output_tokens_total = 0
+        self.recomputed_tokens_total = self.preempted_total = 0
 
     def snapshot(self, now_ns: int | None = None) -> dict[str, Any]:
         stamp = now_ns if now_ns is not None else self.now()
@@ -165,6 +174,7 @@ class Metrics:
                 "cancelled_total": self.cancelled_total,
                 "rejected_total": self.rejected_total,
                 "timed_out_total": self.timed_out_total,
+                "preempted_total": self.preempted_total,
             },
             "latency_ms": {
                 "ttft_p50": round(percentile(ttft, 50), 3),
@@ -177,6 +187,7 @@ class Metrics:
             "tokens": {
                 "input_total": self.input_tokens_total,
                 "output_total": self.output_tokens_total,
+                "recomputed_total": self.recomputed_tokens_total,
                 "output_per_second_60s": round(tokens_60s / 60.0, 2),
             },
             "scheduler": {

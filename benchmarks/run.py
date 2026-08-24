@@ -121,12 +121,13 @@ def _metadata(mode: str, profile: str, items: list[WorkloadItem]) -> dict[str, A
     from cloud_engine.config import load_pinned
 
     pinned = load_pinned()
+    model = pinned.get("ragged_model", pinned["model"]) if mode == "ragged" else pinned["model"]
     return {
         "engine_mode": mode,
         "profile": profile,
         "workload_hash": workload_hash(items),
-        "model_id": pinned["model"]["id"],
-        "model_revision": pinned["model"]["revision"],
+        "model_id": model["id"],
+        "model_revision": model["revision"],
         "package_version": pkg_version,
         "python_version": platform.python_version(),
         "torch_version": torch.__version__,
@@ -226,7 +227,9 @@ async def _run_profile_async(mode: str, profile: str) -> dict[str, Any]:
     from cloud_engine.engine import InferenceEngine
     from cloud_engine.weights import ensure_weights_downloaded, load_tokenizer
 
-    model_dir = ensure_weights_downloaded("/cache", load_pinned()["model"]["revision"])
+    pinned = load_pinned()
+    model = pinned.get("ragged_model", pinned["model"]) if mode == "ragged" else pinned["model"]
+    model_dir = ensure_weights_downloaded("/cache", model["revision"], model["id"])
     tokenizer = load_tokenizer(model_dir)
     items = build_workload(profile, tokenizer)
 

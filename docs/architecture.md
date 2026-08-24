@@ -2,75 +2,111 @@
 
 ## Boundaries
 
-`api -> engine -> model -> attention/cache`; `benchmarks -> engine`; `modal_app -> api + benchmarks`. FastAPI is imported lazily, and Modal is confined to `modal_app.py`, so local allocator, scheduler, validation, and metrics tests need no ML or web packages.
+`api -> engine -> scheduler -> model -> attention/cache`; `benchmarks -> api`;
+`modal_app -> api + benchmarks`. FastAPI and Modal stay at the edges, so local
+allocator, scheduler, validation, and metrics tests do not need a GPU runtime.
 
 ```text
 POST /v1/responses
         |
         v
- validate + auth
+ strict validation + bearer auth
         |
         v
 InferenceEngine.submit
         |
         v
-   FIFO waiting --queue timeout--> timed_out
+ FIFO waiting --queue timeout--> timed_out
         |
         v
-      prefill --------------------> failed
+ decode-first BatchPlan under one token budget
         |
         v
-     decoding --EOS/token cap----> completed
-        |  |
-        |  +--disconnect/stall---> cancelled
-        +------------------------> failed
+ demand allocation -> PackedBatch -> one flat model forward
+        |
+        v
+ ragged Triton attention -> sampled request tails -> ordered SSE
 
-Every terminal state -> release cache -> append stream STOP -> resolve future
+Every terminal state -> release all owned blocks -> STOP -> resolve future
 ```
 
-`InferenceEngine` is the composition root. It selects `NaiveRunner` or `CachedRunner`, one cache backend, and one attention backend from the server-side `EngineConfig`. `Scheduler._finalize` is the only terminal cleanup funnel. `RequestHandle` exposes streaming, waiting, and cancellation without leaking cache or scheduler internals into HTTP handlers.
+`InferenceEngine` is the composition root. The deployed `ragged` mode selects
+`RaggedRunner`, one physical `PagedKVCache`, and
+`RaggedTritonAttentionBackend`. The five earlier runners remain available as
+measured baselines. `Scheduler._finalize` is the only terminal cleanup funnel.
 
-## One scheduling iteration
+## One ragged scheduling iteration
 
 ```text
-reap waiting timeouts + stalled consumers
-                  |
-                  v
-decode one token for active requests within token budget
-                  |
-                  v
-drain pending stream events; stalled request does no new work
-                  |
-                  v
-admit FIFO requests while sequence + prompt-token budgets permit
-                  |
-                  v
-prefill admitted requests -> sample/publish first token -> repeat
+reap timeouts + drain bounded output queues
+                    |
+                    v
+schedule one decode token per runnable decoder first
+                    |
+                    v
+spend remaining shared token budget on <=256-token prefill chunks
+                    |
+                    v
+atomically grow every crossed KV block or preempt one resident sequence
+                    |
+                    v
+flatten token IDs + positions + offsets + block tables + slot mapping
+                    |
+                    v
+one Qwen2.5 forward for the complete BatchPlan
+                    |
+                    v
+commit cache lengths -> sample only sequence-tail logits -> publish
 ```
 
-Tokens first enter a per-request `pending_events` backlog and then a bounded `asyncio.Queue`. This preserves ordering and avoids token loss. A full queue stalls only that request; ten seconds without progress cancels it and releases its cache.
+`BatchPlan` is the scheduler contract. `PackedBatch` is the GPU contract. The
+model sees one flat token axis; device metadata maps each query token to its
+sequence and physical KV blocks. Decode and chunked prefill can coexist in the
+same transformer invocation.
 
-## Ownership and failure behavior
+## KV ownership and pressure recovery
 
-- The scheduler owns request state; terminal transitions are irreversible.
-- The engine owns the selected cache; paged modes have no shadow KV cache.
-- `BlockAllocator` validates an entire free operation before mutating ownership.
-- Weight loading uses an explicit tensor map and rejects missing, duplicate, unexpected, or wrongly shaped tensors.
-- Triton decode fails closed for unsupported shapes unless reference fallback is explicitly enabled.
-- API mode, model revision, cache budget, and hardware are server-side values.
+- Admission creates an empty block table; it does not reserve worst-case output.
+- `ensure_capacity_batch` validates the whole growth operation before assigning
+  blocks, so allocation failure cannot partially mutate a batch.
+- K/V writes use a flat slot mapping; cache lengths commit only after a
+  successful model call.
+- Under pressure, the scheduler releases one resident sequence, resets its
+  computed prefix, and later recomputes prompt plus already-emitted tokens.
+- Generated tokens are never emitted twice and remain the deterministic source
+  of truth during recomputation.
+- Cancellation, timeout, backpressure failure, model failure, and success all
+  converge on the same idempotent release path.
 
-## Deliberate shortcuts
+## Attention paths
 
-Paged admission reserves `prompt + max_output_tokens` blocks up front. This prevents mid-generation OOM without adding eviction or preemption, at the cost of reserved-but-unused memory. Scheduler iterations span requests, but each forward is currently B=1. `naive` and `contiguous` therefore clamp active sequences to one, while later modes admit up to the configured limit. Paged prefill and `paged` decode gather a temporary logical tensor; only `triton` decode reads physical blocks directly.
+The Torch ragged backend is the numerical oracle. The serving backend launches
+one Triton program per flat query token and query head. It follows the
+device-resident block table, reads the physical K/V pool directly, and performs
+online FP32 softmax over contexts up to 4,096 tokens. Supported pinned head
+dimensions are 64 and 128. No logical K/V tensor is reconstructed in the ragged
+serving path.
 
-These ceilings are measured rather than hidden. Add dynamic block growth, true tensor batching, or paged prefill only after the current correctness matrix and benchmark gates pass.
+The earlier `triton` mode remains deliberately serial at the model-forward
+boundary. Its decode kernel now accepts the 3B model's 128-wide heads so the
+online benchmark can compare old and new scheduling on the same model revision.
+
+## HTTP and observability
+
+The API exposes public readiness plus authenticated blocking/streaming
+Responses requests and metrics. Streaming uses bounded per-request queues with
+strict event ordering. The online benchmark drives the real authenticated SSE
+route over warm HTTP and records raw request TTFT, ITL, E2E, token counts,
+errors, queue samples, throughput, SLO goodput, preemption, and recomputation.
 
 ## Verification
 
 ```bash
-.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
-modal run modal_app.py::remote_gpu_tests       # billable L4
+uv run python -m unittest discover -s tests -p 'test_*.py'
 modal run modal_app.py::api_lifecycle_tests
+modal run modal_app.py::remote_ragged_gpu_tests
+modal run modal_app.py::online_compare --rates 0.5,1,2,4 --duration-seconds 10
 ```
 
-Verified 2026-08-24: 45/45 local tests, 45/45 Modal CPU tests plus real FastAPI route/auth checks, and 34/34 L4 checks passed. The deployed Triton API also passed live health, unauthorized rejection, blocking JSON, ordered SSE, metrics, and token-accounting checks.
+See [the Ragged engine chapter](06-ragged-engine.md) and the committed raw
+[three-way online artifact](../artifacts/ragged-vllm-online.json).

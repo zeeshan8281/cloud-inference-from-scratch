@@ -2,36 +2,39 @@
 
 Build the engine behind an LLM API without owning a GPU.
 
-This repository is an educational, from-scratch inference server for the pinned
-`Qwen/Qwen2.5-0.5B` base model. It implements the model forward pass, greedy
-decoding, KV caching, continuous request scheduling, paged KV allocation,
-Responses-style JSON/SSE delivery, and a direct-block Triton decode-attention
-kernel. Heavy execution runs on one serverless NVIDIA L4 through Modal; the
-local package intentionally has no ML runtime dependencies.
+This repository is an educational, from-scratch inference server for a pinned
+`Qwen/Qwen2.5-3B` base model. It implements a flat multi-request transformer
+forward, decode-first token-budget scheduling, chunked prefill, transactional
+demand-paged KV allocation, recompute preemption, mixed ragged Triton attention,
+and authenticated Responses JSON/SSE delivery. Heavy execution runs on one
+serverless NVIDIA L4 through Modal; the local package intentionally has no ML
+runtime dependencies.
 
-> This is tested educational systems code, not a production service or a
-> replacement for vLLM. Two intended optimization gates failed, and the results
-> below show them rather than hiding them.
-
-The current release is the measured five-stage baseline. The next milestone is
-the **Ragged L4 Engine** described below; it is a target architecture, not a
-claim about code that has already shipped.
+> This is tested systems code, not a production service or a replacement for
+> vLLM. The five-stage 0.5B baseline and its failed optimization gates remain
+> published; the sixth stage fixes their architectural causes and is measured
+> against pinned vLLM without hiding the remaining performance gap.
 
 ## Release status
 
-Verified on 2026-08-24:
+Verified on 2026-08-25:
 
-- 45/45 dependency-light local tests passed.
-- 45/45 tests plus real FastAPI route/auth integration passed in Modal's CPU image.
-- 34/34 L4 correctness checks passed in 197.3 seconds on the documented release commit.
-- All five modes produced exactly the same greedy tokens for 10 prompts, and the
-  cached baseline matched Hugging Face `generate()` for all 10.
-- Triton matched the torch-paged reference through context length 2,048 and
-  batches 1, 2, 8, and 16; worst observed absolute difference was below 0.003.
+- 49/49 dependency-light local tests passed.
+- 49/49 tests plus real FastAPI route/auth integration passed in Modal's CPU image.
+- 34/34 legacy L4 regression checks passed in 208.3 seconds.
+- 16/16 Qwen2.5-3B Ragged L4 checks passed in 63.1 seconds: exact HF tokens,
+  four request IDs in one transformer invocation, 4,000-token chunked prefill,
+  decode priority, real pressure recomputation, and zero leaked blocks.
+- Ragged Triton matched the Torch oracle at batches 1/2/4/8/16 and contexts
+  through 4,002 tokens; worst observed absolute difference was 0.00195. The
+  serial Triton kernel also matched at head dimension 128 and context 4,096.
 - Nine fixed-protocol benchmark artifacts were recorded and committed.
-- A deployed Triton API passed public health, unauthenticated rejection,
-  authenticated blocking generation, SSE sequencing/content, token accounting,
-  and authenticated metrics checks.
+- A three-way warm HTTP sweep completed 225/225 raw requests without error on
+  the same pinned 3B revision and workload hash for serial Triton, Ragged, and
+  vLLM 0.10.0.
+- The deployed Ragged API passed public readiness, unauthenticated rejection,
+  authenticated blocking generation, ordered SSE with token usage, and
+  authenticated metrics checks against the external production URL.
 
 ## What “from scratch” means here
 
@@ -55,7 +58,7 @@ FastAPI auth + strict validation
 InferenceEngine.submit
   |
   v
-FIFO Scheduler ---- bounded per-request queues ----> JSON or ordered SSE
+decode-first Scheduler ---- bounded per-request queues ----> JSON or ordered SSE
   |
   v
 custom Qwen2 forward
@@ -65,6 +68,7 @@ custom Qwen2 forward
   +-- batched:    iteration-level multi-request scheduling
   +-- paged:      shared block pool + torch logical gather
   +-- triton:     shared block pool + direct-block decode kernel
+  +-- ragged:     BatchPlan -> PackedBatch -> one mixed Triton forward
 ```
 
 `InferenceEngine` is the composition root. The scheduler alone owns request
@@ -76,11 +80,12 @@ physical KV pool—there is no shadow cache.
 See [the architecture walkthrough](docs/architecture.md) and the stage chapters:
 [naive](docs/01-naive.md), [contiguous KV](docs/02-kv-cache.md),
 [continuous batching](docs/03-continuous-batching.md),
-[paged KV](docs/04-paged-kv.md), and [Triton attention](docs/05-triton-attention.md).
-The editable [Excalidraw target architecture](system-architecture.excalidraw.json)
+[paged KV](docs/04-paged-kv.md), [Triton attention](docs/05-triton-attention.md),
+and [packed Ragged inference](docs/06-ragged-engine.md).
+The editable [Excalidraw architecture](system-architecture.excalidraw.json)
 can be copied into Excalidraw as clipboard JSON.
 
-## The five stages
+## The six stages
 
 | Mode | Change from the prior stage | Decode cache read path | Active requests |
 |---|---|---|---:|
@@ -89,6 +94,7 @@ can be copied into Excalidraw as clipboard JSON.
 | `batched` | FIFO continuous scheduler | Per-request contiguous tensors | Up to 16 |
 | `paged` | Shared 16-token block allocator | Temporary torch gather | Up to 16 |
 | `triton` | Direct physical-block attention | Triton kernel; no decode gather | Up to 16 |
+| `ragged` | Flat multi-request forward + demand paging | Mixed prefill/decode Triton kernel | Up to 16 |
 
 The naïve path normally recomputes the full sequence. FP16 GEMM shape changes can
 flip an argmax when the two best logits are nearly tied, so ambiguous top-two
@@ -97,12 +103,12 @@ discarded. No KV state survives between naïve decode steps. This small,
 documented parity guard preserves the instructional baseline while keeping all
 five greedy outputs deterministic on the tested L4.
 
-## Next milestone: Ragged L4 Engine
+## Ragged L4 Engine
 
-The current scheduler rotates across requests but still awaits one complete
+The older scheduler rotates across requests but still awaits one complete
 `runner.step(request)` model forward per request. Paged admission also reserves
-`prompt + max_output_tokens` capacity up front. The next milestone replaces
-that execution seam rather than adding another named mode around it.
+`prompt + max_output_tokens` capacity up front. The shipped `ragged` mode
+replaces that execution seam rather than relabeling it.
 
 ```text
 waiting + running requests
@@ -129,12 +135,12 @@ ragged paged attention: Torch reference -> L4 Triton kernel
 ordered tokens, metrics, and terminal cleanup
 ```
 
-The final proof target is one pinned `Qwen/Qwen2.5-3B` revision in FP16,
+The verified target is one pinned `Qwen/Qwen2.5-3B` revision in FP16,
 one NVIDIA L4, a 4,096-token project context limit, up to 16 active sequences,
 and deterministic greedy generation. The 0.5B model remains the fast regression
 oracle.
 
-The design adds four concrete runtime contracts:
+The implementation adds four concrete runtime contracts:
 
 - `BatchPlan`: one iteration's per-request token work under a shared token budget;
 - `PackedBatch`: one flat token axis plus ragged positions, offsets, sequence
@@ -144,7 +150,7 @@ The design adds four concrete runtime contracts:
 - one integrated paged-attention path for mixed decode and chunked-prefill work,
   using device-resident metadata and no reconstructed logical K/V tensors.
 
-This milestone is complete only when all of these gates pass:
+Evidence for the acceptance gates:
 
 1. A traced model invocation contains multiple request IDs; the transformer is
    never executed once per scheduled request.
@@ -158,12 +164,16 @@ This milestone is complete only when all of these gates pass:
 6. Warm HTTP arrival-rate sweeps report TTFT, ITL, E2E p50/p95/p99, throughput,
    SLO goodput, errors, queue depth, preemptions, and raw per-request results.
 7. The same protocol compares the old serial Triton baseline, the new ragged
-   engine, and a pinned vLLM deployment on the same L4 and model revision.
+   engine, and pinned vLLM 0.10.0 on the same L4 and model revision.
+
+Gates 1–5 passed in the 16-check L4 suite. Gate 6 passed in the authenticated
+225-request HTTP sweep retained per request in the three-way artifact. Gate 7 uses
+the same workload hash, source identity, 3B revision, L4, active-sequence cap,
+token budget, greedy decoding, and EOS behavior across all implementations.
 
 Prefix caching, KV offload, CUDA graphs, quantization, speculative decoding,
-multi-GPU execution, broader APIs, and additional model families are deliberately
-deferred until packed execution, dynamic paging, pressure recovery, and the
-online benchmark gates are working.
+multi-GPU execution, broader APIs, and additional model families remain
+deliberately deferred beyond this packed/demand-paged milestone.
 
 ## Quickstart: correctness on a cloud GPU
 
@@ -185,16 +195,63 @@ modal setup
 # The Volume is also created automatically if absent.
 modal volume create cloud-inference-model-cache
 
-# Builds the image, downloads the pinned model remotely, and checks HF parity.
-modal run modal_app.py::smoke
+# Builds the image, downloads the pinned 3B model remotely, and checks packing/HF parity.
+modal run modal_app.py::ragged_smoke
 ```
 
-The first run downloads the pinned ~953 MB model snapshot into the Modal Volume.
+The first run downloads the pinned 3B model snapshot into the Modal Volume.
 Weights, Torch, CUDA work, and Triton compilation stay in Modal; they are not
 downloaded to your Mac. Later runs reuse the image and Volume caches. Ephemeral
 containers scale to zero after 60 seconds.
 
 ## Reproducible benchmark results
+
+### Ragged 3B online comparison
+
+The current release uses warm authenticated streaming HTTP, fixed interval
+arrivals at 0.5/1/2/4 requests per second, ten seconds per rate, 16–256-token
+prompts, and 32 requested output tokens. Serial Triton, Ragged, and vLLM use the
+same pinned Qwen2.5-3B revision, NVIDIA L4, FP16, 4,096-token context, 16 active
+sequences, 2,048 scheduled tokens, temperature zero, and EOS behavior. The raw
+[JSON artifact](artifacts/ragged-vllm-online.json) includes every request and the
+prompt-covering workload hash; it does not include prompt text.
+
+Prefix caching is disabled in vLLM because prompts repeat across arrival-rate
+sweeps and the custom engines do not implement it; otherwise later rates would
+measure cache hits instead of the same inference work.
+
+The custom engines use the configured 4 GiB KV pool. vLLM uses its normal 0.85
+GPU-memory-utilization policy (12.76 GiB KV reported in this environment). The
+workload does not pressure either pool, but this is a throughput/latency
+comparison, not a memory-normalized capacity comparison.
+
+vLLM is the performance reference, not a dependency of the custom serving path.
+
+| Arrival | Engine | TTFT p99 | ITL p99 | E2E p99 | Output tok/s | SLO goodput | Errors | Queue max |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 0.5 req/s | serial Triton | 83.6 ms | 65.7 ms | 1,900.9 ms | 13.6 | 0.618 req/s | 0 | 0 |
+|  | Ragged | 63.4 ms | 54.3 ms | 1,928.9 ms | 13.6 | 0.495 req/s | 0 | 1 |
+|  | vLLM 0.10.0 | 100.3 ms | 30.2 ms | 920.9 ms | 13.7 | 0.621 req/s | 0 | n/a |
+| 1 req/s | serial Triton | 255.4 ms | 313.5 ms | 7,109.2 ms | 16.6 | 0.208 req/s | 0 | 1 |
+|  | Ragged | 108.0 ms | 60.7 ms | 1,779.9 ms | 22.3 | 0.933 req/s | 0 | 1 |
+|  | vLLM 0.10.0 | 73.1 ms | 30.0 ms | 918.7 ms | 24.1 | 1.010 req/s | 0 | n/a |
+| 2 req/s | serial Triton | 531.8 ms | 754.8 ms | 14,025.6 ms | 16.7 | 0.538 req/s | 0 | 1 |
+|  | Ragged | 127.7 ms | 63.6 ms | 1,859.2 ms | 32.4 | 2.086 req/s | 0 | 1 |
+|  | vLLM 0.10.0 | 72.2 ms | 34.0 ms | 940.4 ms | 32.6 | 2.095 req/s | 0 | n/a |
+| 4 req/s | serial Triton | 13,231.2 ms | 1,163.6 ms | 27,083.3 ms | 16.7 | 0.624 req/s | 0 | 3 |
+|  | Ragged | 592.6 ms | 87.2 ms | 2,450.0 ms | 49.3 | 3.432 req/s | 0 | 2 |
+|  | vLLM 0.10.0 | 72.1 ms | 36.0 ms | 979.3 ms | 53.5 | 3.825 req/s | 0 | n/a |
+
+At 4 req/s, Ragged delivered **2.96×** the serial engine's output throughput
+and **92.0%** of vLLM's while keeping TTFT and ITL p99 inside the stated SLO.
+Its p99 TTFT was still 8.2× vLLM and p99 E2E was 2.5× vLLM, so the result proves
+real packed scheduling—not production parity. All 225 measured requests
+completed without error. The 4 GiB online pool did not preempt; non-zero
+preemption and recomputation are proven separately by the 5 MiB pressure test.
+vLLM queue depth is `n/a` because its HTTP API did not expose an equivalent
+per-sweep queue sample; the artifact records `null`, not a fabricated zero.
+
+### Historical five-stage 0.5B matrix
 
 Environment: one NVIDIA L4, FP16, Python 3.12, PyTorch 2.7.1, Triton 3.3.1,
 Transformers 4.51.3, model revision
@@ -282,6 +339,10 @@ modal run modal_app.py::api_lifecycle_tests
 
 # Billable L4: model/oracle/cache/kernel/concurrency/failure/stream checks.
 modal run modal_app.py::remote_gpu_tests
+modal run modal_app.py::remote_ragged_gpu_tests
+
+# Billable three-way warm HTTP comparison; writes raw JSON locally.
+modal run modal_app.py::online_compare --rates 0.5,1,2,4 --duration-seconds 10
 ```
 
 The GPU suite covers:
@@ -300,9 +361,14 @@ The allocator and scheduler tests cover exhaustion, ownership, atomic invalid
 free, FIFO admission, queue/token/context limits, backpressure, slow consumers,
 idempotent cancellation, injected decode failure, timeout, and terminal cleanup.
 
+The Ragged suite additionally covers one real multi-request forward, exact 3B
+HF token parity, transactional growth, 256-token prefill chunks, decode-first
+ordering, recompute preemption under a 5 MiB pool, mixed-query Triton/Torch
+parity through 4,096 tokens, and post-run allocator invariants.
+
 ## Deploy the API
 
-Generate a strong key, store it in Modal, and deploy the server-fixed `triton`
+Generate a strong key, store it in Modal, and deploy the server-fixed `ragged`
 mode. Do not commit or paste the key into source files.
 
 ```bash
@@ -325,7 +391,7 @@ curl -sS "$ENGINE_URL/v1/responses" \
   -H "Authorization: Bearer $ENGINE_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{
-    "model":"Qwen/Qwen2.5-0.5B",
+    "model":"Qwen/Qwen2.5-3B",
     "input":"Explain a KV cache in one sentence.",
     "max_output_tokens":64,
     "temperature":0,
@@ -340,7 +406,7 @@ curl -sS -N "$ENGINE_URL/v1/responses" \
   -H "Authorization: Bearer $ENGINE_API_KEY" \
   -H 'Content-Type: application/json' \
   -d '{
-    "model":"Qwen/Qwen2.5-0.5B",
+    "model":"Qwen/Qwen2.5-3B",
     "input":"Explain paged attention in one sentence.",
     "max_output_tokens":64,
     "temperature":0,
@@ -428,7 +494,7 @@ Cost controls in `engine_config.json`:
 - 60-second scale-down window;
 - 20-minute per-call timeout;
 - no schedule and no benchmark-on-deploy; and
-- roughly 953 MB of persistent model data.
+- roughly 6 GB of persistent 3B model data, plus the retained 0.5B oracle.
 
 On the development Mac, the measured working tree was 28 MB including a 27 MB
 virtual environment; the Modal CLI occupied 32 MB. The shared uv cache was 1.5
@@ -460,28 +526,28 @@ src/cloud_engine/model.py    custom Qwen2 forward path
 src/cloud_engine/weights.py  explicit safetensor mapping and shape validation
 src/cloud_engine/cache.py    contiguous cache, paged pool, block allocator
 src/cloud_engine/attention.py torch backends and Triton dispatch
-src/cloud_engine/kernel.py   direct-block Triton decode attention
-src/cloud_engine/scheduler.py lifecycle, admission, backpressure, cleanup
-src/cloud_engine/engine.py   engine facade, runners, request handles
+src/cloud_engine/kernel.py   serial decode and mixed ragged Triton attention
+src/cloud_engine/scheduler.py lifecycle, BatchPlan, priority, preemption
+src/cloud_engine/engine.py   runners, PackedBatch, engine facade and handles
 src/cloud_engine/api.py      validation, auth, Responses JSON, SSE
 src/cloud_engine/metrics.py  bounded measurements
-benchmarks/                  deterministic workloads and three-run protocol
-artifacts/                   all nine raw benchmark results
+benchmarks/                  deterministic offline and online HTTP workloads
+artifacts/                   baseline plus raw three-way online results
 tests/                       local/CPU tests and L4 correctness matrix
 docs/                        architecture and one chapter per stage
 ```
 
 ## Current-release limitations
 
-This release supports one pinned base model revision, FP16, a single L4, greedy
-text-only generation, a 2,048-token context, and a narrow Responses-style API.
-It has no sampling, instruction/chat template, quantization, prefix cache,
-chunked prefill, dynamic KV growth, eviction, preemption, cache swapping, CUDA
-graphs, tensor parallelism, multi-GPU support, persistent metrics, or user system.
+The deployed release supports one pinned 3B base-model revision, FP16, a single
+L4, greedy text-only generation, a 4,096-token project context limit, and a
+narrow Responses-style API. It has no sampling, instruction/chat template,
+quantization, prefix cache, cache swapping/offload, CUDA graphs, fused non-
+attention kernels, speculative decoding, tensor parallelism, multi-GPU support,
+persistent metrics, tenant isolation, or user system.
 
-The Ragged L4 Engine milestone above is the selected path out of these limits.
-Until its gates pass, the repository should be described as a tested educational
-engine baseline, not as a true continuous-batching or production serving engine.
+It is a real packed inference engine with bounded scope, not a production stack.
+The vLLM comparison quantifies the remaining kernel/runtime optimization gap.
 
 ## Troubleshooting
 
@@ -491,19 +557,20 @@ engine baseline, not as a true continuous-batching or production serving engine.
   header; redeploy after rotating a secret if an existing container stays warm.
 - **422 asking for a `request` query parameter:** update to the release containing
   the FastAPI request-injection fix and redeploy.
-- **`capacity_exhausted`:** reduce concurrent context/output reservations; v1
-  reserves worst-case blocks at admission and does not evict.
+- **`capacity_exhausted`:** reduce concurrency or context size. Ragged demand
+  paging can preempt and recompute active work, but cannot admit a request whose
+  own context cannot fit the physical pool.
 - **Container preempted:** Modal can transparently retry ephemeral runs. Benchmark
   artifacts are written only after one complete two-warmup/three-run attempt.
 - **Triton refuses a shape:** this is fail-closed behavior. Use the pinned model,
-  FP16, block size 16, and contexts no longer than 2,048.
+  FP16, block size 16, head dimension 64 or 128, and contexts no longer than 4,096.
 
 ## References and license
 
 The design is informed by the
 [PagedAttention paper](https://arxiv.org/abs/2309.06180),
 [Triton](https://triton-lang.org/), the
-[Qwen2.5-0.5B model](https://huggingface.co/Qwen/Qwen2.5-0.5B), and
+[Qwen2.5-3B model](https://huggingface.co/Qwen/Qwen2.5-3B), and
 [Modal GPU/Web Function documentation](https://modal.com/docs/guide/gpu).
 
 Repository code is [MIT licensed](LICENSE). Runtime components and downloaded
@@ -511,7 +578,7 @@ weights retain their own licenses:
 
 | Component | License |
 |---|---|
-| Qwen/Qwen2.5-0.5B weights and tokenizer | Apache-2.0 |
+| Qwen/Qwen2.5-0.5B and 3B weights/tokenizers | Apache-2.0 |
 | PyTorch | BSD-3-Clause |
 | Triton | MIT |
 | Transformers, Tokenizers, safetensors, huggingface_hub | Apache-2.0 |

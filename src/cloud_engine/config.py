@@ -12,9 +12,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
-Mode = Literal["naive", "contiguous", "batched", "paged", "triton"]
+Mode = Literal["naive", "contiguous", "batched", "paged", "triton", "ragged"]
 
-ALL_MODES: tuple[str, ...] = ("naive", "contiguous", "batched", "paged", "triton")
+ALL_MODES: tuple[str, ...] = ("naive", "contiguous", "batched", "paged", "triton", "ragged")
 SINGLE_SEQUENCE_MODES: tuple[str, ...] = ("naive", "contiguous")
 
 CONFIG_FILENAME = "engine_config.json"
@@ -35,6 +35,7 @@ class EngineConfig:
     max_active_sequences: int
     max_queue_size: int
     max_batched_tokens: int
+    prefill_chunk_size: int
     queue_timeout_seconds: float
     stream_queue_capacity: int
     slow_consumer_timeout_seconds: float
@@ -74,7 +75,7 @@ def build_config(
     pinned defaults verbatim so results stay reproducible.
     """
     pinned = pinned or load_pinned()
-    model = pinned["model"]
+    model = pinned.get("ragged_model", pinned["model"]) if mode == "ragged" else pinned["model"]
     scheduler = pinned["scheduler"]
     kv = pinned["kv_cache"]
     values = dict(
@@ -88,6 +89,7 @@ def build_config(
         max_active_sequences=scheduler["max_active_sequences"],
         max_queue_size=scheduler["max_queue_size"],
         max_batched_tokens=scheduler["max_batched_tokens"],
+        prefill_chunk_size=scheduler.get("prefill_chunk_size", scheduler["max_batched_tokens"]),
         queue_timeout_seconds=scheduler["queue_timeout_seconds"],
         stream_queue_capacity=scheduler["stream_queue_capacity"],
         slow_consumer_timeout_seconds=scheduler["slow_consumer_timeout_seconds"],
@@ -110,6 +112,8 @@ def validate_config(config: EngineConfig) -> None:
         raise ValueError("v1 supports float16 only (PRD FR1)")
     if config.max_output_tokens < 1:
         raise ValueError("max_output_tokens must be positive")
+    if config.max_batched_tokens < 1 or config.prefill_chunk_size < 1:
+        raise ValueError("batch token limits must be positive")
     if not 1 <= config.max_model_len <= 2048 * 8:
         raise ValueError("max_model_len out of range")
     if config.block_size != 16:

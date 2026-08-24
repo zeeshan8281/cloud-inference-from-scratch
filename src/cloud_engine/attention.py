@@ -34,6 +34,21 @@ class StepContext:
     is_decode: bool
 
 
+@dataclass
+class PackedContext:
+    """Device metadata for one flat, multi-request token batch."""
+
+    request_ids: tuple[str, ...]
+    query_ranges: tuple[tuple[int, int], ...]
+    context_lens: tuple[int, ...]
+    final_lens: tuple[int, ...]
+    positions: Any
+    query_start_loc: Any
+    block_tables: Any
+    slot_mapping: Any
+    query_seq_ids: Any
+
+
 def rms_norm(hidden: Any, weight: Any, eps: float) -> Any:
     dtype = hidden.dtype
     x = hidden.to(_torch.float32)
@@ -169,3 +184,63 @@ class TritonDecodeAttentionBackend(AttentionBackend):
                     self._fallback_warned = True
                     print(f"[triton] kernel unavailable ({exc}); using reference gather path")
         return super().attend(layer, ctx, q, k, v)
+
+
+class RaggedTorchAttentionBackend(AttentionBackend):
+    """Correctness reference for a flat mixed prefill/decode batch."""
+
+    def attend(self, layer: int, ctx: PackedContext, q: Any, k: Any, v: Any) -> Any:
+        self.cache.append_slots(layer, k, v, ctx.slot_mapping)
+        outputs = []
+        for index, request_id in enumerate(ctx.request_ids):
+            start, end = ctx.query_ranges[index]
+            view = self.cache.view(request_id, layer, length=ctx.final_lens[index])
+            outputs.append(
+                causal_attention(
+                    q[start:end],
+                    self._expand(view.keys),
+                    self._expand(view.values),
+                    self.sm_scale,
+                    past_len=ctx.context_lens[index],
+                )
+            )
+        return _torch.cat(outputs, dim=0)
+
+
+class RaggedTritonAttentionBackend(AttentionBackend):
+    """Mixed ragged attention directly over physical paged KV blocks."""
+
+    def __init__(self, *args: Any, allow_reference_fallback: bool = False, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.allow_reference_fallback = allow_reference_fallback
+        self._reference = RaggedTorchAttentionBackend(
+            self.cache,
+            self.num_heads,
+            self.num_kv_heads,
+            self.head_dim,
+        )
+        self._fallback_warned = False
+
+    def attend(self, layer: int, ctx: PackedContext, q: Any, k: Any, v: Any) -> Any:
+        self.cache.append_slots(layer, k, v, ctx.slot_mapping)
+        try:
+            from .kernel import ragged_attention_direct
+
+            output = ragged_attention_direct(
+                q,
+                self.cache.key_pool[layer],
+                self.cache.value_pool[layer],
+                ctx.block_tables,
+                ctx.query_seq_ids,
+                ctx.positions,
+                self.sm_scale,
+            )
+            return output.reshape(q.shape[0], self.num_heads * self.head_dim)
+        except Exception as exc:
+            if not self.allow_reference_fallback:
+                raise
+            if not self._fallback_warned:
+                self._fallback_warned = True
+                print(f"[ragged-triton] kernel unavailable ({exc}); using torch reference")
+            # append_slots is idempotent for the same physical destinations.
+            return self._reference.attend(layer, ctx, q, k, v)
