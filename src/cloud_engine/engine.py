@@ -90,11 +90,11 @@ class CachedRunner(RunnerBase):
     def release(self, request: Request) -> None:
         self.cache.release(request.request_id)
 
-    def _ctx(self, request: Request, seq_len: int, is_decode: bool) -> StepContext:
-        kv_start = seq_len - (1 if is_decode else len(request.prompt_token_ids))
+    def _ctx(self, request: Request, is_decode: bool) -> StepContext:
+        kv_start = len(request.prompt_token_ids) + request.tokens_fed - 1 if is_decode else 0
         return StepContext(
             request_id=request.request_id,
-            kv_start=max(kv_start, 0),
+            kv_start=kv_start,
             is_decode=is_decode,
         )
 
@@ -104,13 +104,12 @@ class CachedRunner(RunnerBase):
         cached_len = request.tokens_fed  # tokens already written to the cache
         if cached_len == 0:
             input_ids = torch.tensor(request.prompt_token_ids, dtype=torch.long, device=self.device)
-            ctx = self._ctx(request, len(request.prompt_token_ids), is_decode=False)
+            ctx = self._ctx(request, is_decode=False)
             logits = self.model(input_ids, ctx=ctx)
         else:
             next_token = request.generated_token_ids[cached_len - 1]
             input_ids = torch.tensor([next_token], dtype=torch.long, device=self.device)
-            total = cached_len + 1
-            ctx = self._ctx(request, total, is_decode=True)
+            ctx = self._ctx(request, is_decode=True)
             logits = self.model(input_ids, ctx=ctx)
         request.tokens_fed += 1
         return greedy_sample(logits)
