@@ -157,13 +157,13 @@ async def check_five_mode_token_parity() -> None:
         )
 
     hf_reference = []
-    for prompt in PARITY_PROMPTS[:3]:
+    for prompt in PARITY_PROMPTS:
         _, gen = reference_logits_and_tokens(tokenizer.encode(prompt), max_new=32)
         hf_reference.append(gen)
     ok = all(
-        hf == got for hf, got in zip(hf_reference, outputs_by_mode["contiguous"][:3], strict=True)
+        hf == got for hf, got in zip(hf_reference, outputs_by_mode["contiguous"], strict=True)
     )
-    record("greedy parity vs HF generate() oracle (first 3 prompts)", ok)
+    record("greedy parity vs HF generate() oracle (10 prompts)", ok)
 
 
 def synthetic_attention_inputs(seq_len: int, batch: int = 1):
