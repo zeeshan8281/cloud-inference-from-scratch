@@ -154,7 +154,8 @@ def smoke() -> dict:
     async def _run():
         await engine_obj.start()
         handle = await engine_obj.submit(
-            prompt, GenerationConfig(max_output_tokens=max_output, eos_token_id=MODEL["eos_token_id"])
+            prompt,
+            GenerationConfig(max_output_tokens=max_output, eos_token_id=MODEL["eos_token_id"]),
         )
         result = await handle.wait()
         metrics_snapshot = engine_obj.snapshot_metrics()
@@ -176,12 +177,14 @@ def smoke() -> dict:
     if not match:
         print(f"ours     : {ours[:24]}{'...' if len(ours) > 24 else ''}")
         print(f"reference: {reference_ids[:24]}{'...' if len(reference_ids) > 24 else ''}")
-    ttft = result.ttft_ms or float('nan')
+    ttft = result.ttft_ms or float("nan")
     print(f"TTFT               : {ttft:.1f} ms")
     throughput = result.output_tokens / wall_s
     print(f"output tok/s       : {throughput:.1f} (wall-clock incl. startup)")
-    print(f"TTFT p50/p95       : {snapshot['latency_ms']['ttft_p50']:.1f}/"
-          f"{snapshot['latency_ms']['ttft_p95']:.1f} ms")
+    print(
+        f"TTFT p50/p95       : {snapshot['latency_ms']['ttft_p50']:.1f}/"
+        f"{snapshot['latency_ms']['ttft_p95']:.1f} ms"
+    )
     print(f"peak GPU memory    : {torch.cuda.max_memory_allocated() / 2**20:.0f} MiB")
     dashboard = "https://modal.com/apps"
     try:
@@ -202,9 +205,7 @@ def _reference_generate(model_dir: str, prompt_ids: list[int], max_new_tokens: i
     import torch
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_dir, torch_dtype=torch.float16, device_map="cuda"
-    )
+    model = AutoModelForCausalLM.from_pretrained(model_dir, torch_dtype=torch.float16).to("cuda")
     model.eval()
     input_ids = torch.tensor([prompt_ids], device="cuda")
     with torch.no_grad():
@@ -217,7 +218,7 @@ def _reference_generate(model_dir: str, prompt_ids: list[int], max_new_tokens: i
             top_k=None,
             pad_token_id=MODEL["eos_token_id"],
         )
-    return out[0][input_ids.shape[1]:].tolist()
+    return out[0][input_ids.shape[1] :].tolist()
 
 
 @app.local_entrypoint()
@@ -245,8 +246,10 @@ def _run_benchmark(mode: str, profile: str) -> dict:
 
 def _print_benchmark_table(result: dict) -> None:
     meta = result["metadata"]
-    print(f"mode={meta['engine_mode']} profile={meta['profile']} "
-          f"gpu={meta.get('gpu_name', 'unknown')} runs={len(result['runs'])}")
+    print(
+        f"mode={meta['engine_mode']} profile={meta['profile']} "
+        f"gpu={meta.get('gpu_name', 'unknown')} runs={len(result['runs'])}"
+    )
     med = result["median"]
     header = f"{'metric':>34} | {'median':>12}"
     print(header)
@@ -271,8 +274,10 @@ def _print_benchmark_table(result: dict) -> None:
             print(f"{label:>34} | {value:>12,}")
     print("\nall runs:")
     for index, run in enumerate(result["runs"], start=1):
-        print(f"  run {index}: out_tok/s={run['aggregate']['output_tokens_per_second']:,.1f} "
-              f"ttft_p50={run['latency']['ttft_p50_ms']:.1f}ms")
+        print(
+            f"  run {index}: out_tok/s={run['aggregate']['output_tokens_per_second']:,.1f} "
+            f"ttft_p50={run['latency']['ttft_p50_ms']:.1f}ms"
+        )
 
 
 @app.function(**_gpu_options())

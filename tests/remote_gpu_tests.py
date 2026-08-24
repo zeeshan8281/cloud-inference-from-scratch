@@ -31,6 +31,7 @@ PARITY_PROMPTS = PROMPTS + [
 ]
 
 RESULTS: list[tuple[str, bool, str]] = []
+_REFERENCE_MODEL = None
 
 
 def record(name: str, passed: bool, detail: str = "") -> None:
@@ -50,13 +51,18 @@ def build_engine(mode: str, fallback: bool = False):
 
 def reference_logits_and_tokens(prompt_ids: list[int], max_new: int):
     """Hugging Face oracle — test-only usage (PRD G4/M1)."""
+    global _REFERENCE_MODEL
+
     import torch
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_DIR, torch_dtype=torch.float16, device_map="cuda"
-    )
-    model.eval()
+    if _REFERENCE_MODEL is None:
+        _REFERENCE_MODEL = (
+            AutoModelForCausalLM.from_pretrained(MODEL_DIR, torch_dtype=torch.float16)
+            .to("cuda")
+            .eval()
+        )
+    model = _REFERENCE_MODEL
     input_ids = torch.tensor([prompt_ids], device="cuda")
     with torch.no_grad():
         logits = model(input_ids).logits[0]
@@ -68,7 +74,7 @@ def reference_logits_and_tokens(prompt_ids: list[int], max_new: int):
             top_p=None,
             top_k=None,
             pad_token_id=151643,
-        )[0][input_ids.shape[1]:].tolist()
+        )[0][input_ids.shape[1] :].tolist()
     return logits, generated
 
 
@@ -88,8 +94,9 @@ def check_logits_parity() -> None:
     from cloud_engine.weights import load_model, load_tokenizer
 
     dims = load_model_config(MODEL_DIR)
-    attn = AttentionBackend(cache=None, num_heads=dims.num_heads,
-                            num_kv_heads=dims.num_kv_heads, head_dim=dims.head_dim)
+    attn = AttentionBackend(
+        cache=None, num_heads=dims.num_heads, num_kv_heads=dims.num_kv_heads, head_dim=dims.head_dim
+    )
     custom_model, _ = load_model(MODEL_DIR, attn, dtype=torch.float16, device="cuda")
     tokenizer = load_tokenizer(MODEL_DIR)
 
@@ -127,13 +134,12 @@ async def check_five_mode_token_parity() -> None:
 
     baseline = outputs_by_mode["contiguous"]
     for mode, sequences in outputs_by_mode.items():
-        mismatches = [
-            i for i, (a, b) in enumerate(zip(baseline, sequences, strict=True)) if a != b
-        ]
+        mismatches = [i for i, (a, b) in enumerate(zip(baseline, sequences, strict=True)) if a != b]
         record(
             f"greedy token parity across 5 modes: {mode}",
             not mismatches,
-            f"{len(PARITY_PROMPTS)} prompts x<=32 tokens" + (f" mismatched={mismatches}" if mismatches else ""),
+            f"{len(PARITY_PROMPTS)} prompts x<=32 tokens"
+            + (f" mismatched={mismatches}" if mismatches else ""),
         )
 
     hf_reference = []
@@ -141,10 +147,7 @@ async def check_five_mode_token_parity() -> None:
         _, gen = reference_logits_and_tokens(tokenizer.encode(prompt), max_new=32)
         hf_reference.append(gen)
     ok = all(
-        hf == got
-        for hf, got in zip(
-            hf_reference, outputs_by_mode["contiguous"][:3], strict=True
-        )
+        hf == got for hf, got in zip(hf_reference, outputs_by_mode["contiguous"][:3], strict=True)
     )
     record("greedy parity vs HF generate() oracle (first 3 prompts)", ok)
 
@@ -154,8 +157,12 @@ def synthetic_attention_inputs(seq_len: int, batch: int = 1):
 
     generator = torch.Generator(device="cuda").manual_seed(seq_len * 31 + batch)
     q = torch.randn(batch, 14, 64, generator=generator, device="cuda", dtype=torch.float16)
-    keys = torch.randn(batch, seq_len, 14, 64, generator=generator, device="cuda", dtype=torch.float16)
-    values = torch.randn(batch, seq_len, 14, 64, generator=generator, device="cuda", dtype=torch.float16)
+    keys = torch.randn(
+        batch, seq_len, 14, 64, generator=generator, device="cuda", dtype=torch.float16
+    )
+    values = torch.randn(
+        batch, seq_len, 14, 64, generator=generator, device="cuda", dtype=torch.float16
+    )
     return q, keys, values
 
 
@@ -177,8 +184,13 @@ def check_paged_vs_contiguous_boundaries() -> None:
     lengths = [1, 15, 16, 17, 127, 128, 129, 2048]
     for seq_len in lengths:
         cache = PagedKVCache(
-            num_layers=1, num_kv_heads=2, head_dim=64,
-            block_size=16, kv_cache_bytes=64 << 20, dtype=torch.float16, device="cuda",
+            num_layers=1,
+            num_kv_heads=2,
+            head_dim=64,
+            block_size=16,
+            kv_cache_bytes=64 << 20,
+            dtype=torch.float16,
+            device="cuda",
         )
         request_id = f"boundary-{seq_len}"
         cache.reserve(request_id, seq_len)
@@ -186,7 +198,7 @@ def check_paged_vs_contiguous_boundaries() -> None:
         backend = AttentionBackend(cache, num_heads=14, num_kv_heads=2, head_dim=64)
         ctx = StepContext(request_id=request_id, kv_start=0, is_decode=False)
         # append happens inside attend(); feed kv-shaped k/v (heads 14 -> kv 2 by slicing groups)
-        kv_keys = keys[:, :, ::7]   # take every 7th head -> 2 heads (synthetic)
+        kv_keys = keys[:, :, ::7]  # take every 7th head -> 2 heads (synthetic)
         kv_values = values[:, :, ::7]
         got = backend.attend(layer=0, ctx=ctx, q=q[0], k=kv_keys[0], v=kv_values[0])
         got = got.reshape(1, 14, -1)
@@ -207,8 +219,13 @@ def check_triton_vs_torch_boundaries() -> None:
     lengths = [1, 15, 16, 17, 127, 128, 129, 512, 2048]
     for batch in batch_sizes:
         cache = PagedKVCache(
-            num_layers=1, num_kv_heads=2, head_dim=64,
-            block_size=16, kv_cache_bytes=256 << 20, dtype=torch.float16, device="cuda",
+            num_layers=1,
+            num_kv_heads=2,
+            head_dim=64,
+            block_size=16,
+            kv_cache_bytes=256 << 20,
+            dtype=torch.float16,
+            device="cuda",
         )
         tables = []
         lens = []
@@ -234,15 +251,21 @@ def check_triton_vs_torch_boundaries() -> None:
             expanded_v = view.values.repeat_interleave(7, dim=1)
             from cloud_engine.attention import causal_attention
 
-            ctx_out = causal_attention(single_q[0], expanded_k, expanded_v, 8**-0.5, past_len=lens[b] - 1)
+            ctx_out = causal_attention(
+                single_q[0], expanded_k, expanded_v, 8**-0.5, past_len=lens[b] - 1
+            )
             outs.append(ctx_out.reshape(14, 64))
         expected = torch.stack(outs)
-        got = decode_attention_batched(q, cache.key_pool[0], cache.value_pool[0], tables, lens, 8**-0.5)
+        got = decode_attention_batched(
+            q, cache.key_pool[0], cache.value_pool[0], tables, lens, 8**-0.5
+        )
         ok = torch.allclose(got.float(), expected.float(), rtol=2e-2, atol=2e-2)
         diff = float((got.float() - expected.float()).abs().max())
         record(f"triton==torch-paged batch={batch}", ok, f"max|Δ|={diff:.4f}")
         # single-request wrapper sanity on first row
-        one = decode_attention_direct(q[0], cache.key_pool[0], cache.value_pool[0], tables[0], lens[0], 8**-0.5)
+        one = decode_attention_direct(
+            q[0], cache.key_pool[0], cache.value_pool[0], tables[0], lens[0], 8**-0.5
+        )
         record(f"triton single wrapper batch={batch}", torch.equal(one, got[0]))
         for b in range(batch):
             cache.release(f"tri-{batch}-{b}")
@@ -254,6 +277,7 @@ async def check_concurrent_no_leaks() -> None:
     _, engine = build_engine("paged")
     await engine.start()
     try:
+
         async def drive(i: int):
             handle = await engine.submit(
                 f"Request number {i} about memory pages.",
@@ -265,8 +289,11 @@ async def check_concurrent_no_leaks() -> None:
         completed = sum(1 for r in results if r.finish_reason.startswith(("eos", "max")))
         stats = engine.cache.stats()
         record("16 concurrent requests complete", completed >= 15, f"completed={completed}")
-        record("allocator drained after concurrency", stats.blocks_used == 0,
-               f"used_blocks={stats.blocks_used}")
+        record(
+            "allocator drained after concurrency",
+            stats.blocks_used == 0,
+            f"used_blocks={stats.blocks_used}",
+        )
     finally:
         await engine.close()
 
@@ -336,8 +363,11 @@ async def check_streaming_matches_non_streaming() -> None:
         result = await blocking_handle.wait()
         same_tokens = events == result.token_ids
         same_text = streamed_text == result.text
-        record("streamed token sequence equals wait()", same_tokens,
-               f"{len(events)} vs {len(result.token_ids)}")
+        record(
+            "streamed token sequence equals wait()",
+            same_tokens,
+            f"{len(events)} vs {len(result.token_ids)}",
+        )
         record("streamed text equals wait() text", same_text)
         record("stream token ids preserve generation order", events == result.token_ids)
     finally:
@@ -357,8 +387,10 @@ def main() -> int:
 
     failed = [(n, d) for n, ok, d in RESULTS if not ok]
     elapsed = time.time() - started
-    print(f"\n{len(RESULTS)} checks in {elapsed:.1f}s — "
-          f"{len(RESULTS) - len(failed)} passed, {len(failed)} failed")
+    print(
+        f"\n{len(RESULTS)} checks in {elapsed:.1f}s — "
+        f"{len(RESULTS) - len(failed)} passed, {len(failed)} failed"
+    )
     if failed:
         print(json.dumps([{"check": n, "detail": d} for n, d in failed], indent=2))
         print("reminder: Modal compute is billable.")
