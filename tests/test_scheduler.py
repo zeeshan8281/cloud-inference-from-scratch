@@ -117,6 +117,7 @@ class TestSchedulerBasics(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(request.request_id, self.scheduler.runner.reserved)
         self.assertIn(request.request_id, self.scheduler.runner.released)
         self.assertFalse(request.pending_events)
+        self.assertGreater(self.scheduler.metrics.snapshot()["latency_ms"]["e2e_p50"], 0)
 
     async def test_fifo_admission_order(self) -> None:
         order: list[int] = []

@@ -49,6 +49,7 @@ class CacheStats:
 
     def as_metrics(self) -> dict[str, Any]:
         return {
+            "kind": self.kind,
             "blocks_total": self.blocks_total,
             "blocks_used": self.blocks_used,
             "utilization": round(self.utilization, 4),

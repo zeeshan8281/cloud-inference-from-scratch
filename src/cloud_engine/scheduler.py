@@ -380,6 +380,8 @@ class Scheduler:
         if not request.terminal_future.done():
             request.terminal_future.set_result(request)
         if request.state is RequestState.COMPLETED:
+            now = self.clock()
+            self.metrics.record_e2e_ms((now - request.arrival_ns) / 1e6, now)
             self.metrics.inc_completed()
         elif request.state is RequestState.CANCELLED:
             self.metrics.inc_cancelled()
