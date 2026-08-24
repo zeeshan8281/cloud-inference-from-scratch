@@ -26,9 +26,8 @@ modal run modal_app.py::benchmark --mode naive --profile decode --output artifac
 modal run modal_app.py::benchmark --mode contiguous --profile decode --output artifacts/contiguous-decode.json
 ```
 
-Measurements are pending. Publication requires contiguous median output throughput to exceed naive under the fixed three-run protocol.
+The fixed three-run protocol measured 27.5 output tok/s for contiguous versus 16.4 for naïve, passing the gate at 1.68×. Median decode TTFT fell from 12,973.7 ms to 9,276.0 ms. See [`contiguous-decode.json`](../artifacts/contiguous-decode.json).
 
 ## Remaining production shortcut
 
 Worst-case per-request preallocation makes admission simple but wastes the unused tail. The mode is deliberately single-active-request so the next chapter can isolate scheduling throughput.
-

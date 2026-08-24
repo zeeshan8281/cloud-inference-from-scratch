@@ -33,9 +33,8 @@ modal run modal_app.py::benchmark --mode paged --profile decode --output artifac
 modal run modal_app.py::benchmark --mode triton --profile decode --output artifacts/triton-decode.json
 ```
 
-Measurements are pending. Publication requires Triton median throughput to be no slower than paged reference while performing no full-cache decode gather.
+The gate passed: Triton measured 21.4 output tok/s versus torch-paged at 19.5, a 1.10× ratio. The paged reference gathered 567.7 MiB over the decode workload; Triton gathered 2.63 MiB for prefill only and performed no full-cache decode gather. See [`paged-decode.json`](../artifacts/paged-decode.json) and [`triton-decode.json`](../artifacts/triton-decode.json).
 
 ## Remaining production shortcut
 
 The first kernel targets the pinned Qwen shape, FP16, block size 16, a single L4, and decode batches up to 16. Prefill is not paged-kernel optimized, and the implementation has no autotuning, CUDA graphs, or multi-query fusion.
-

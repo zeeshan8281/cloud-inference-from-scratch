@@ -33,9 +33,8 @@ modal run modal_app.py::benchmark --mode batched --profile fragmentation --outpu
 modal run modal_app.py::benchmark --mode paged --profile fragmentation --output artifacts/paged-fragmentation.json
 ```
 
-Measurements are pending. Publication requires at least 40% less reserved-but-unused KV memory than `batched` on the fixed fragmentation profile.
+The gate failed. Peak reserved-but-unused KV was 23.95 MiB for paged versus 22.93 MiB for batched: paged was 4.45% worse, not 40% better. Eager worst-case reservation removes the key memory benefit of on-demand paging, and 16-token block rounding adds waste. See [`batched-fragmentation.json`](../artifacts/batched-fragmentation.json) and [`paged-fragmentation.json`](../artifacts/paged-fragmentation.json).
 
 ## Remaining production shortcut
 
 Admission eagerly reserves enough blocks for prompt plus maximum output. This guarantees no mid-generation OOM without eviction, but leaves block-granularity and unused-reservation waste. PyTorch attention gathers full logical K/V tensors, so this stage is **paged KV allocation**, not optimized paged attention.
-

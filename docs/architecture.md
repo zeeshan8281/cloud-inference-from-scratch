@@ -73,5 +73,4 @@ modal run modal_app.py::remote_gpu_tests       # billable L4
 modal run modal_app.py::api_lifecycle_tests
 ```
 
-The local suite is green. Remote API and GPU verification has not yet run.
-
+Verified 2026-08-24: 45/45 local tests, 45/45 Modal CPU tests plus real FastAPI route/auth checks, and 34/34 L4 checks passed. The deployed Triton API also passed live health, unauthorized rejection, blocking JSON, ordered SSE, metrics, and token-accounting checks.

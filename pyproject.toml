@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "Cloud Inference Engine Lab contributors" }]
+urls = { Repository = "https://github.com/zeeshan8281/cloud-inference-from-scratch", Issues = "https://github.com/zeeshan8281/cloud-inference-from-scratch/issues" }
 # Intentionally empty: the local install stays lightweight (PRD G2).
 # Torch/Triton/FastAPI live only inside the Modal image defined in modal_app.py.
 dependencies = []
