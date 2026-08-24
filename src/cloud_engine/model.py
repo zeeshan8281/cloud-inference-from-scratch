@@ -215,7 +215,8 @@ def greedy_sample(logits: Any) -> int:
     return int(_torch.argmax(logits[-1].to(_torch.float32)).item())
 
 
-def load_model_config(model_dir: Path) -> ModelDims:
+def load_model_config(model_dir: str | Path) -> ModelDims:
+    model_dir = Path(model_dir)
     with open(model_dir / "config.json", encoding="utf-8") as handle:
         raw = json.load(handle)
     return ModelDims.from_hf_config(raw)

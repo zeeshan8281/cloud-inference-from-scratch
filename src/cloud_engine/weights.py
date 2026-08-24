@@ -75,7 +75,8 @@ def expected_tensors(dims: ModelDims) -> dict[str, tuple[int, ...]]:
     return shapes
 
 
-def load_state_dict(model_dir: Path, dims: ModelDims, dtype: Any = None) -> dict[str, Any]:
+def load_state_dict(model_dir: str | Path, dims: ModelDims, dtype: Any = None) -> dict[str, Any]:
+    model_dir = Path(model_dir)
     shard_paths = sorted(model_dir.glob("*.safetensors"))
     if not shard_paths:
         raise FileNotFoundError(f"no *.safetensors found in {model_dir}")
@@ -120,7 +121,7 @@ def load_state_dict(model_dir: Path, dims: ModelDims, dtype: Any = None) -> dict
 
 
 def load_model(
-    model_dir: Path,
+    model_dir: str | Path,
     attn_backend: Any,
     dtype: Any = None,
     device: str = "cuda",
@@ -128,6 +129,7 @@ def load_model(
     """Build the engine model and load verified weights strictly."""
     import torch
 
+    model_dir = Path(model_dir)
     with open(model_dir / "config.json", encoding="utf-8") as handle:
         hf_config = json.load(handle)
     dims = ModelDims.from_hf_config(hf_config)
@@ -154,7 +156,7 @@ def ensure_weights_downloaded(cache_root: str, revision: str) -> Path:
     return Path(local_path)
 
 
-def load_tokenizer(model_dir: Path) -> Any:
+def load_tokenizer(model_dir: str | Path) -> Any:
     """Tokenizers may come from HF tooling (PRD G1); generation may not."""
     from transformers import AutoTokenizer
 
