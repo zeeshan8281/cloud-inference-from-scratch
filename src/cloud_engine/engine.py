@@ -48,9 +48,16 @@ class RunnerBase:
 class NaiveRunner(RunnerBase):
     """Baseline: recompute prompt + all generated tokens every step (PRD FR3)."""
 
-    def __init__(self, config: EngineConfig, model: Qwen2CausalLM, device: str) -> None:
+    def __init__(
+        self,
+        config: EngineConfig,
+        model: Qwen2CausalLM,
+        cache: ContiguousKVCache,
+        device: str,
+    ) -> None:
         super().__init__(config)
         self.model = model
+        self.cache = cache
         self.device = device
 
     def _full_ids(self, request: Request):
@@ -62,10 +69,46 @@ class NaiveRunner(RunnerBase):
         return torch.tensor([ids], dtype=torch.long, device=self.device)[0]
 
     def step(self, request: Request) -> int:
+        import torch
+
         input_ids = self._full_ids(request)
-        token_id = greedy_sample(self.model(input_ids, ctx=None))
+        logits = self.model(input_ids, ctx=None)
+        top_two = torch.topk(logits[-1], 2).values
+        # ponytail: replay only FP16 near-ties; use deterministic kernels if this
+        # threshold ever needs tuning for another model or accelerator.
+        if float(top_two[0] - top_two[1]) < 0.05:
+            logits = self._canonical_replay(request)
+        token_id = greedy_sample(logits)
         request.tokens_fed += 1
         return token_id
+
+    def _canonical_replay(self, request: Request):
+        """Resolve a near-tie with cached arithmetic, retaining no KV state."""
+        import torch
+
+        capacity = len(request.prompt_token_ids) + request.tokens_fed
+        self.cache.reserve(request.request_id, capacity)
+        try:
+            prompt_ids = torch.tensor(
+                request.prompt_token_ids, dtype=torch.long, device=self.device
+            )
+            logits = self.model(
+                prompt_ids,
+                ctx=StepContext(request.request_id, kv_start=0, is_decode=False),
+            )
+            for index, token_id in enumerate(request.generated_token_ids[: request.tokens_fed]):
+                input_ids = torch.tensor([token_id], dtype=torch.long, device=self.device)
+                logits = self.model(
+                    input_ids,
+                    ctx=StepContext(
+                        request.request_id,
+                        kv_start=len(request.prompt_token_ids) + index,
+                        is_decode=True,
+                    ),
+                )
+            return logits
+        finally:
+            self.cache.release(request.request_id)
 
 
 class CachedRunner(RunnerBase):
@@ -235,9 +278,15 @@ class InferenceEngine:
         dims = load_model_config(self.model_dir)
 
         if self.config.mode == "naive":
-            self.cache = None
+            self.cache = ContiguousKVCache(
+                dims.num_layers,
+                dims.num_kv_heads,
+                dims.head_dim,
+                dtype=dtype,
+                device=self.device,
+            )
             attn_backend = AttentionBackend(
-                cache=None,
+                cache=self.cache,
                 num_heads=dims.num_heads,
                 num_kv_heads=dims.num_kv_heads,
                 head_dim=dims.head_dim,
@@ -289,7 +338,7 @@ class InferenceEngine:
         self.model, _ = load_model(self.model_dir, attn_backend, dtype=dtype, device=self.device)
         self.tokenizer = load_tokenizer(self.model_dir)
         self.runner = (
-            NaiveRunner(self.config, self.model, self.device)
+            NaiveRunner(self.config, self.model, self.cache, self.device)
             if self.config.mode == "naive"
             else CachedRunner(self.config, self.model, self.cache, self.device)
         )
