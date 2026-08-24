@@ -40,7 +40,21 @@ image = (
         f"pydantic=={IMAGE_PINS['pydantic']}",
         f"httpx=={IMAGE_PINS['httpx']}",
     )
-    .add_local_python_source("cloud_engine")
+    .add_local_dir(
+        Path(__file__).parent / "src/cloud_engine",
+        "/root/cloud_engine",
+        copy=True,
+    )
+    .add_local_dir(
+        Path(__file__).parent / "benchmarks",
+        "/root/benchmarks",
+        copy=True,
+    )
+    .add_local_dir(
+        Path(__file__).parent / "tests",
+        "/root/tests",
+        copy=True,
+    )
     .add_local_file(
         Path(__file__).parent / "engine_config.json",
         "/root/engine_config.json",
