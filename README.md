@@ -19,7 +19,7 @@ Verified on 2026-08-24:
 
 - 45/45 dependency-light local tests passed.
 - 45/45 tests plus real FastAPI route/auth integration passed in Modal's CPU image.
-- 34/34 L4 correctness checks passed in 203.8 seconds.
+- 34/34 L4 correctness checks passed in 197.3 seconds on the documented release commit.
 - All five modes produced exactly the same greedy tokens for 10 prompts, and the
   cached baseline matched Hugging Face `generate()` for all 10.
 - Triton matched the torch-paged reference through context length 2,048 and
