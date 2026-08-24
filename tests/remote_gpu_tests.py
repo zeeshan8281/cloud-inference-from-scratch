@@ -139,11 +139,21 @@ async def check_five_mode_token_parity() -> None:
     baseline = outputs_by_mode["contiguous"]
     for mode, sequences in outputs_by_mode.items():
         mismatches = [i for i, (a, b) in enumerate(zip(baseline, sequences, strict=True)) if a != b]
+        first_differences = []
+        for index in mismatches:
+            left, right = baseline[index], sequences[index]
+            position = next(
+                (i for i, pair in enumerate(zip(left, right, strict=False)) if pair[0] != pair[1]),
+                min(len(left), len(right)),
+            )
+            first_differences.append(
+                (index, position, left[position : position + 1], right[position : position + 1])
+            )
         record(
             f"greedy token parity across 5 modes: {mode}",
             not mismatches,
             f"{len(PARITY_PROMPTS)} prompts x<=32 tokens"
-            + (f" mismatched={mismatches}" if mismatches else ""),
+            + (f" first_differences={first_differences}" if mismatches else ""),
         )
 
     hf_reference = []
@@ -173,8 +183,8 @@ def synthetic_attention_inputs(seq_len: int, batch: int = 1):
 def contiguous_reference(q, keys, values, sm_scale):
     from cloud_engine.attention import causal_attention
 
-    expanded_k = keys.repeat_interleave(7, dim=1)[0]
-    expanded_v = values.repeat_interleave(7, dim=1)[0]
+    expanded_k = keys[0].repeat_interleave(7, dim=1)
+    expanded_v = values[0].repeat_interleave(7, dim=1)
     out = causal_attention(q[0:1], expanded_k, expanded_v, sm_scale, past_len=0)
     return out.reshape(1, 14, 64)
 
