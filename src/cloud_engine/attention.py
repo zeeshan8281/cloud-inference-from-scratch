@@ -114,9 +114,9 @@ class AttentionBackend:
         self.sm_scale = 1.0 / math.sqrt(head_dim)
         self.group = num_heads // num_kv_heads
 
-    def attend(self, layer: int, ctx: StepContext, q: Any, k: Any, v: Any) -> Any:
+    def attend(self, layer: int, ctx: StepContext | None, q: Any, k: Any, v: Any) -> Any:
         """q: [Tq, Hq, D] post-RoPE; k/v: [T, KVH, D] pre-cache."""
-        if self.cache is None or ctx.request_id is None:
+        if self.cache is None or ctx is None or ctx.request_id is None:
             expanded_k = self._expand(k)
             expanded_v = self._expand(v)
             return causal_attention(q, expanded_k, expanded_v, self.sm_scale, past_len=0)
