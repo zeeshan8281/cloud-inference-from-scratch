@@ -71,9 +71,7 @@ def make_scheduler(mode: str = "batched", **overrides) -> Scheduler:
                 "max_batched_tokens": overrides.pop("max_batched_tokens", 512),
                 "queue_timeout_seconds": overrides.pop("queue_timeout_seconds", 60),
                 "stream_queue_capacity": overrides.pop("stream_queue_capacity", 4),
-                "slow_consumer_timeout_seconds": overrides.pop(
-                    "slow_consumer_timeout_seconds", 10
-                ),
+                "slow_consumer_timeout_seconds": overrides.pop("slow_consumer_timeout_seconds", 10),
             },
             "kv_cache": {"block_size": 16, "bytes": 4294967296},
         },
@@ -83,7 +81,11 @@ def make_scheduler(mode: str = "batched", **overrides) -> Scheduler:
 
 async def submit_and_wait(scheduler: Scheduler, prompt: str, tokens: int, **gen_kwargs):
     handle_request = await scheduler.submit(
-        prompt, [7] * tokens, GenerationConfig(max_output_tokens=tokens + gen_kwargs.pop("out", 3), eos_token_id=151643, **gen_kwargs)
+        prompt,
+        [7] * tokens,
+        GenerationConfig(
+            max_output_tokens=tokens + gen_kwargs.pop("out", 3), eos_token_id=151643, **gen_kwargs
+        ),
     )
     await consume_stream(handle_request)
     return await handle_request.terminal_future
@@ -201,11 +203,22 @@ class TestSchedulerBasics(unittest.IsolatedAsyncioTestCase):
         # Do not start the loop; nothing drains the waiting queue.
         await scheduler.submit("a", [1], GenerationConfig(max_output_tokens=1, eos_token_id=None))
         with self.assertRaises(RejectedError) as caught:
-            await scheduler.submit("b", [1], GenerationConfig(max_output_tokens=1, eos_token_id=None))
+            await scheduler.submit(
+                "b", [1], GenerationConfig(max_output_tokens=1, eos_token_id=None)
+            )
         self.assertEqual(caught.exception.reason, RejectionReason.QUEUE_FULL)
 
 
 class TestTerminalPaths(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelling_waiting_request_removes_it_from_fifo(self) -> None:
+        scheduler = make_scheduler()
+        request = await scheduler.submit(
+            "cancel before start", [1], GenerationConfig(max_output_tokens=4, eos_token_id=None)
+        )
+        scheduler.cancel(request)
+        self.assertNotIn(request, scheduler.waiting)
+        self.assertTrue(request.terminal_future.done())
+
     async def test_cancellation_is_idempotent_and_releases(self) -> None:
         scheduler = make_scheduler(queue_timeout_seconds=30)
         await scheduler.start()
@@ -271,6 +284,31 @@ class TestTerminalPaths(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.state, RequestState.FAILED)
             self.assertNotIn(request.request_id, scheduler.runner.reserved)
             self.assertEqual(scheduler.metrics.snapshot()["requests"]["failed_total"], 1)
+        finally:
+            await scheduler.stop()
+
+    async def test_decode_failure_does_not_kill_scheduler(self) -> None:
+        class DecodeFailureRunner(FakeRunner):
+            def step(self, request):
+                if request.request_id == "req-00000001" and request.tokens_fed == 1:
+                    raise RuntimeError("injected decode failure")
+                return super().step(request)
+
+        scheduler = make_scheduler()
+        scheduler.runner = DecodeFailureRunner()
+        await scheduler.start()
+        try:
+            failed = await scheduler.submit(
+                "fails on decode", [1], GenerationConfig(max_output_tokens=4, eos_token_id=None)
+            )
+            await asyncio.wait_for(failed.terminal_future, timeout=5)
+            self.assertEqual(failed.state, RequestState.FAILED)
+
+            healthy = await scheduler.submit(
+                "still works", [1], GenerationConfig(max_output_tokens=1, eos_token_id=None)
+            )
+            await consume_stream(healthy)
+            self.assertEqual(healthy.state, RequestState.COMPLETED)
         finally:
             await scheduler.stop()
 

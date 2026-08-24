@@ -92,7 +92,9 @@ class Request:
     state: RequestState = RequestState.WAITING
     generated_token_ids: list[int] = field(default_factory=list)
     output_queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=1))
-    terminal_future: asyncio.Future = field(default_factory=lambda: asyncio.get_event_loop().create_future())
+    terminal_future: asyncio.Future = field(
+        default_factory=lambda: asyncio.get_event_loop().create_future()
+    )
 
     # engine bookkeeping (not part of the public contract)
     tokens_fed: int = 0
@@ -144,11 +146,14 @@ class Scheduler:
         self.waiting: deque[Request] = deque()
         self.active: list[Request] = []
         self._task: asyncio.Task | None = None
+        self._inflight: Request | None = None
         self._running = False
         self._counter = 0
 
     # ------------------------------------------------------------------ api
-    async def submit(self, prompt: str, prompt_token_ids: list[int], gen_config: GenerationConfig) -> Request:
+    async def submit(
+        self, prompt: str, prompt_token_ids: list[int], gen_config: GenerationConfig
+    ) -> Request:
         total = len(prompt_token_ids) + gen_config.max_output_tokens
         if len(prompt_token_ids) == 0:
             raise RejectedError(RejectionReason.CONTEXT_OVERFLOW, "empty prompt")
@@ -195,7 +200,8 @@ class Scheduler:
         request.assert_not_terminal()
         request.state = RequestState.CANCELLED
         request.finish_reason = "cancelled"
-        self._finalize(request)
+        if request is not self._inflight:
+            self._finalize(request)
 
     # ------------------------------------------------------------- internals
     async def _run(self) -> None:
@@ -207,6 +213,8 @@ class Scheduler:
             prefill_tokens = 0
 
             for request in list(self.active):
+                if request.is_terminal:
+                    continue
                 if budget <= 0:
                     break
                 if request.pending_events:
@@ -215,7 +223,17 @@ class Scheduler:
                     continue  # consumer behind: deliver backlog before new work
                 if request.stalled_since_ns is not None:
                     continue  # queue still full this iteration
-                token_id = await self._step(request)
+                try:
+                    token_id = await self._step(request)
+                except Exception as exc:
+                    if request.is_terminal:
+                        self._finalize(request)
+                    else:
+                        self._fail(request, f"decode failed: {exc}")
+                    continue
+                if request.is_terminal:
+                    self._finalize(request)
+                    continue
                 budget -= 1
                 processed += 1
                 progressed = True
@@ -244,7 +262,13 @@ class Scheduler:
                 try:
                     token_id = await self._step(candidate)
                 except Exception as exc:
-                    self._fail(candidate, f"prefill failed: {exc}")
+                    if candidate.is_terminal:
+                        self._finalize(candidate)
+                    else:
+                        self._fail(candidate, f"prefill failed: {exc}")
+                    continue
+                if candidate.is_terminal:
+                    self._finalize(candidate)
                     continue
                 budget -= len(candidate.prompt_token_ids)
                 prefill_tokens += len(candidate.prompt_token_ids)
@@ -256,7 +280,11 @@ class Scheduler:
             await asyncio.sleep(0 if progressed else self.idle_sleep_seconds)
 
     async def _step(self, request: Request) -> int:
-        return await asyncio.to_thread(self.runner.step, request)
+        self._inflight = request
+        try:
+            return await asyncio.to_thread(self.runner.step, request)
+        finally:
+            self._inflight = None
 
     def _reap(self, now: int) -> bool:
         progressed = False
@@ -284,13 +312,13 @@ class Scheduler:
             request.first_token_ns = now
             self.metrics.record_ttft_ms((now - request.arrival_ns) / 1e6, now)
         else:
-            self.metrics.record_itl_ms(
-                ((now - (request.last_token_ns or now)) / 1e6), now
-            )
+            self.metrics.record_itl_ms(((now - (request.last_token_ns or now)) / 1e6), now)
         request.last_token_ns = now
         self.metrics.record_output_token(1, now)
 
-        eos_hit = request.config.eos_token_id is not None and token_id == request.config.eos_token_id
+        eos_hit = (
+            request.config.eos_token_id is not None and token_id == request.config.eos_token_id
+        )
         limit_hit = request.generated_count >= request.config.max_output_tokens
         if eos_hit:
             request.finish_reason = "eos_token_reached"
@@ -339,6 +367,8 @@ class Scheduler:
         """Single terminal funnel: release cache, close stream in order, resolve."""
         if request in self.active:
             self.active.remove(request)
+        if request in self.waiting:
+            self.waiting.remove(request)
         try:
             self.runner.release(request)
         except Exception as exc:  # release must never break teardown
