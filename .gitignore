@@ -8,6 +8,5 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .modal/
-artifacts/*.json
 .env
 .DS_Store

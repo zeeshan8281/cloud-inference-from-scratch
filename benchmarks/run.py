@@ -10,6 +10,7 @@ only — never prompts or generated text.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -43,7 +44,8 @@ def build_workload(profile: str, tokenizer: Any) -> list[WorkloadItem]:
         raise ValueError(f"unknown profile {profile!r}; choose from {sorted(spec['profiles'])}")
     settings = spec["profiles"][profile]
     bank = spec["word_bank"]
-    rng = random.Random(spec["seed"] + hash(profile) % 100000)
+    profile_seed = int.from_bytes(hashlib.sha256(profile.encode()).digest()[:4], "big")
+    rng = random.Random(spec["seed"] + profile_seed)
 
     items: list[WorkloadItem] = []
     for index in range(settings["concurrent_requests"]):
@@ -53,7 +55,9 @@ def build_workload(profile: str, tokenizer: Any) -> list[WorkloadItem]:
             target_prompt = lo + (hi - lo) * index // max(1, settings["concurrent_requests"] - 1)
         tolerance = settings.get("prompt_tokens_tolerance", 0)
         out_lo, out_hi = settings["output_tokens_min"], settings["output_tokens_max"]
-        output_target = out_lo + (out_hi - out_lo) * index // max(1, settings["concurrent_requests"] - 1)
+        output_target = out_lo + (out_hi - out_lo) * index // max(
+            1, settings["concurrent_requests"] - 1
+        )
 
         words: list[str] = []
         prompt_text = ""
@@ -88,7 +92,11 @@ def build_workload(profile: str, tokenizer: Any) -> list[WorkloadItem]:
 
 def workload_hash(items: list[WorkloadItem]) -> str:
     canonical = json.dumps(
-        [[i.prompt_tokens, i.output_tokens] for i in items], separators=(",", ":")
+        [
+            [hashlib.sha256(i.prompt.encode()).hexdigest(), i.prompt_tokens, i.output_tokens]
+            for i in items
+        ],
+        separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
@@ -142,8 +150,6 @@ async def _execute_run(engine: Any, items: list[WorkloadItem]) -> dict[str, Any]
             ),
         )
         result = await handle.wait()
-        async for _ in handle.stream():  # drains any remaining stream events
-            pass
         return {
             "ttft_ms": result.ttft_ms or 0.0,
             "e2e_ms": result.e2e_ms,
@@ -152,8 +158,25 @@ async def _execute_run(engine: Any, items: list[WorkloadItem]) -> dict[str, Any]
             "finish_reason": result.finish_reason,
         }
 
+    peak_cache = {"reserved_bytes": 0, "occupied_bytes": 0, "internal_fragmentation_bytes": 0}
+    gather_start = getattr(engine.cache, "gathered_bytes", 0)
+
+    async def sample_cache() -> None:
+        while True:
+            if engine.cache is not None:
+                stats = engine.cache.stats().as_metrics()
+                for key in peak_cache:
+                    peak_cache[key] = max(peak_cache[key], stats[key])
+            await asyncio.sleep(0.005)
+
+    sampler = asyncio.create_task(sample_cache())
     wall_start = time.perf_counter()
-    records = list(await asyncio.gather(*(drive(item) for item in items)))
+    try:
+        records = list(await asyncio.gather(*(drive(item) for item in items)))
+    finally:
+        sampler.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sampler
     wall_s = time.perf_counter() - wall_start
 
     ttfts = [r["ttft_ms"] for r in records]
@@ -186,8 +209,12 @@ async def _execute_run(engine: Any, items: list[WorkloadItem]) -> dict[str, Any]
         },
         "scheduler_mean_batch_size_60s": snapshot["scheduler"]["mean_batch_size_60s"],
         "scheduler_max_batch_size_60s": snapshot["scheduler"]["max_batch_size_60s"],
-        "kv_internal_fragmentation_bytes": snapshot["kv_cache"].get("internal_fragmentation_bytes", 0),
-        "kv_temporary_gather_bytes": snapshot["kv_cache"].get("temporary_gather_bytes", 0),
+        "kv_peak_reserved_bytes": peak_cache["reserved_bytes"],
+        "kv_peak_occupied_bytes": peak_cache["occupied_bytes"],
+        "kv_internal_fragmentation_bytes": peak_cache["internal_fragmentation_bytes"],
+        "kv_temporary_gather_bytes": max(
+            0, getattr(engine.cache, "gathered_bytes", 0) - gather_start
+        ),
         "requests_failed": snapshot["requests"]["failed_total"],
         "requests_cancelled": snapshot["requests"]["cancelled_total"],
         "requests_rejected": snapshot["requests"]["rejected_total"],

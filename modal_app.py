@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import modal
@@ -24,6 +25,18 @@ MODAL_CFG = PINNED["modal"]
 APP_NAME = MODAL_CFG["app_name"]
 VOLUME_NAME = MODAL_CFG["volume_name"]
 SECRET_NAME = MODAL_CFG["secret_name"]
+
+
+def _source_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).parent, text=True
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+SOURCE_COMMIT = _source_commit()
 app = modal.App(APP_NAME)
 
 image = (
@@ -63,6 +76,7 @@ image = (
     .env(
         {
             "HF_HUB_DISABLE_TELEMETRY": "1",
+            "SOURCE_COMMIT": SOURCE_COMMIT,
             "TRITON_CACHE_DIR": "/cache/triton-cache",
             "TOKENIZERS_PARALLELISM": "false",
         }
