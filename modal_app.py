@@ -292,11 +292,13 @@ def remote_gpu_tests() -> None:
     _print_run_header("remote GPU correctness suite")
     model_dir = _prepare_weights()
     tests_dir = Path(__file__).parent / "tests"
-    runpy.run_path(
+    suite = runpy.run_path(
         str(tests_dir / "remote_gpu_tests.py"),
-        run_name="__remote_gpu_tests__",
+        run_name="__remote_gpu_tests_module__",
         init_globals={"MODEL_DIR": model_dir},
     )
+    if suite["main"]():
+        raise RuntimeError("remote GPU correctness suite failed")
 
 
 @app.function(
