@@ -11,6 +11,7 @@ import asyncio
 import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .attention import AttentionBackend, StepContext, TritonDecodeAttentionBackend
@@ -177,7 +178,7 @@ class InferenceEngine:
         device: str | None = None,
     ) -> None:
         self.config = config
-        self.model_dir = model_dir
+        self.model_dir = Path(model_dir) if model_dir is not None else None
         self.device = device or ("cuda" if self._cuda_available() else "cpu")
         self._custom_runner_factory = runner_factory
         self.metrics = Metrics()
