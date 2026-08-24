@@ -144,6 +144,9 @@ class RequestHandle:
                 self._engine.scheduler.cancel(self.request)
 
     async def wait(self) -> GenerationResult:
+        if not self.request.terminal_future.done():
+            async for _ in self.stream():
+                pass
         request = await self.request.terminal_future
         if request.state is not RequestState.COMPLETED:
             raise RuntimeError(
