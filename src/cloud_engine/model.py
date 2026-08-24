@@ -94,6 +94,7 @@ class Qwen2MLP(nn.Module):
 class Qwen2Attention(nn.Module):
     def __init__(self, dims: ModelDims, dtype: Any, device: str) -> None:
         super().__init__()
+        self.head_dim = dims.head_dim
         self.q_proj = nn.Linear(
             dims.hidden_size,
             dims.num_heads * dims.head_dim,
