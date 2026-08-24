@@ -116,8 +116,8 @@ def _percentile(values: list[float], pct: float) -> float:
 def _metadata(mode: str, profile: str, items: list[WorkloadItem]) -> dict[str, Any]:
     import torch
     import transformers
-    from cloud_engine.__version__ import __version__ as pkg_version
 
+    from cloud_engine import __version__ as pkg_version
     from cloud_engine.config import load_pinned
 
     pinned = load_pinned()
