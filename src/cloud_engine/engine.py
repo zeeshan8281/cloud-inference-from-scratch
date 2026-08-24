@@ -145,6 +145,10 @@ class RequestHandle:
 
     async def wait(self) -> GenerationResult:
         request = await self.request.terminal_future
+        if request.state is not RequestState.COMPLETED:
+            raise RuntimeError(
+                f"generation {request.state.value}: {request.error_detail or request.finish_reason}"
+            )
         now_ns = self._engine.metrics.now()
         e2e_ms = (now_ns - request.arrival_ns) / 1e6
         text = self._engine.detokenize(request.generated_token_ids)
@@ -230,31 +234,51 @@ class InferenceEngine:
 
         if self.config.mode == "naive":
             self.cache = None
-            attn_backend = AttentionBackend(cache=None, num_heads=dims.num_heads,
-                                            num_kv_heads=dims.num_kv_heads, head_dim=dims.head_dim)
+            attn_backend = AttentionBackend(
+                cache=None,
+                num_heads=dims.num_heads,
+                num_kv_heads=dims.num_kv_heads,
+                head_dim=dims.head_dim,
+            )
         elif self.config.mode in ("contiguous", "batched"):
             self.cache = ContiguousKVCache(
-                dims.num_layers, dims.num_kv_heads, dims.head_dim,
-                dtype=dtype, device=self.device,
+                dims.num_layers,
+                dims.num_kv_heads,
+                dims.head_dim,
+                dtype=dtype,
+                device=self.device,
             )
-            attn_backend = AttentionBackend(self.cache, dims.num_heads, dims.num_kv_heads, dims.head_dim)
+            attn_backend = AttentionBackend(
+                self.cache, dims.num_heads, dims.num_kv_heads, dims.head_dim
+            )
         elif self.config.mode == "paged":
             self.cache = PagedKVCache(
-                dims.num_layers, dims.num_kv_heads, dims.head_dim,
+                dims.num_layers,
+                dims.num_kv_heads,
+                dims.head_dim,
                 block_size=self.config.block_size,
                 kv_cache_bytes=self.config.kv_cache_bytes,
-                dtype=dtype, device=self.device,
+                dtype=dtype,
+                device=self.device,
             )
-            attn_backend = AttentionBackend(self.cache, dims.num_heads, dims.num_kv_heads, dims.head_dim)
+            attn_backend = AttentionBackend(
+                self.cache, dims.num_heads, dims.num_kv_heads, dims.head_dim
+            )
         elif self.config.mode == "triton":
             self.cache = PagedKVCache(
-                dims.num_layers, dims.num_kv_heads, dims.head_dim,
+                dims.num_layers,
+                dims.num_kv_heads,
+                dims.head_dim,
                 block_size=self.config.block_size,
                 kv_cache_bytes=self.config.kv_cache_bytes,
-                dtype=dtype, device=self.device,
+                dtype=dtype,
+                device=self.device,
             )
             attn_backend = TritonDecodeAttentionBackend(
-                self.cache, dims.num_heads, dims.num_kv_heads, dims.head_dim,
+                self.cache,
+                dims.num_heads,
+                dims.num_kv_heads,
+                dims.head_dim,
                 allow_reference_fallback=self.config.allow_reference_fallback,
             )
         else:  # pragma: no cover - validated in config
@@ -270,7 +294,9 @@ class InferenceEngine:
         self.ready = True
 
     # ---------------------------------------------------------------- usage
-    async def submit(self, prompt: str, gen_config: GenerationConfig | None = None) -> RequestHandle:
+    async def submit(
+        self, prompt: str, gen_config: GenerationConfig | None = None
+    ) -> RequestHandle:
         assert self.scheduler is not None and self.ready
         gen_config = gen_config or GenerationConfig(
             max_output_tokens=self.config.max_output_tokens,
