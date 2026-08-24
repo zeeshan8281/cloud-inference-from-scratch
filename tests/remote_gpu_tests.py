@@ -58,16 +58,20 @@ def reference_logits_and_tokens(prompt_ids: list[int], max_new: int):
 
     if _REFERENCE_MODEL is None:
         _REFERENCE_MODEL = (
-            AutoModelForCausalLM.from_pretrained(MODEL_DIR, torch_dtype=torch.float16)
+            AutoModelForCausalLM.from_pretrained(
+                MODEL_DIR, torch_dtype=torch.float16, attn_implementation="eager"
+            )
             .to("cuda")
             .eval()
         )
     model = _REFERENCE_MODEL
     input_ids = torch.tensor([prompt_ids], device="cuda")
+    attention_mask = torch.ones_like(input_ids)
     with torch.no_grad():
-        logits = model(input_ids).logits[0]
+        logits = model(input_ids, attention_mask=attention_mask).logits[0]
         generated = model.generate(
             input_ids,
+            attention_mask=attention_mask,
             max_new_tokens=max_new,
             do_sample=False,
             temperature=None,
@@ -158,10 +162,10 @@ def synthetic_attention_inputs(seq_len: int, batch: int = 1):
     generator = torch.Generator(device="cuda").manual_seed(seq_len * 31 + batch)
     q = torch.randn(batch, 14, 64, generator=generator, device="cuda", dtype=torch.float16)
     keys = torch.randn(
-        batch, seq_len, 14, 64, generator=generator, device="cuda", dtype=torch.float16
+        batch, seq_len, 2, 64, generator=generator, device="cuda", dtype=torch.float16
     )
     values = torch.randn(
-        batch, seq_len, 14, 64, generator=generator, device="cuda", dtype=torch.float16
+        batch, seq_len, 2, 64, generator=generator, device="cuda", dtype=torch.float16
     )
     return q, keys, values
 
@@ -171,7 +175,7 @@ def contiguous_reference(q, keys, values, sm_scale):
 
     expanded_k = keys.repeat_interleave(7, dim=1)[0]
     expanded_v = values.repeat_interleave(7, dim=1)[0]
-    out = causal_attention(q[0], expanded_k, expanded_v, sm_scale, past_len=0)
+    out = causal_attention(q[0:1], expanded_k, expanded_v, sm_scale, past_len=0)
     return out.reshape(1, 14, 64)
 
 
@@ -197,10 +201,7 @@ def check_paged_vs_contiguous_boundaries() -> None:
         q, keys, values = synthetic_attention_inputs(seq_len)
         backend = AttentionBackend(cache, num_heads=14, num_kv_heads=2, head_dim=64)
         ctx = StepContext(request_id=request_id, kv_start=0, is_decode=False)
-        # append happens inside attend(); feed kv-shaped k/v (heads 14 -> kv 2 by slicing groups)
-        kv_keys = keys[:, :, ::7]  # take every 7th head -> 2 heads (synthetic)
-        kv_values = values[:, :, ::7]
-        got = backend.attend(layer=0, ctx=ctx, q=q[0], k=kv_keys[0], v=kv_values[0])
+        got = backend.attend(layer=0, ctx=ctx, q=q[0:1], k=keys[0], v=values[0])
         got = got.reshape(1, 14, -1)
         expected = contiguous_reference(q, keys, values, backend.sm_scale)
         ok = torch.allclose(got.float(), expected.float(), rtol=2e-2, atol=2e-2)
@@ -252,7 +253,7 @@ def check_triton_vs_torch_boundaries() -> None:
             from cloud_engine.attention import causal_attention
 
             ctx_out = causal_attention(
-                single_q[0], expanded_k, expanded_v, 8**-0.5, past_len=lens[b] - 1
+                single_q, expanded_k, expanded_v, 8**-0.5, past_len=lens[b] - 1
             )
             outs.append(ctx_out.reshape(14, 64))
         expected = torch.stack(outs)

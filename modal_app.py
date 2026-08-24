@@ -205,12 +205,16 @@ def _reference_generate(model_dir: str, prompt_ids: list[int], max_new_tokens: i
     import torch
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained(model_dir, torch_dtype=torch.float16).to("cuda")
+    model = AutoModelForCausalLM.from_pretrained(
+        model_dir, torch_dtype=torch.float16, attn_implementation="eager"
+    ).to("cuda")
     model.eval()
     input_ids = torch.tensor([prompt_ids], device="cuda")
+    attention_mask = torch.ones_like(input_ids)
     with torch.no_grad():
         out = model.generate(
             input_ids,
+            attention_mask=attention_mask,
             max_new_tokens=max_new_tokens,
             do_sample=False,
             temperature=None,

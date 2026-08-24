@@ -27,8 +27,9 @@ class KernelUnsupported(RuntimeError):
     """Raised before launch when shapes fall outside the supported envelope."""
 
 
-def _validate(q: Any, k_pool_layer: Any, v_pool_layer: Any, block_tables: list[list[int]],
-              seq_lens: list[int]) -> tuple[int, int, int, int]:
+def _validate(
+    q: Any, k_pool_layer: Any, v_pool_layer: Any, block_tables: list[list[int]], seq_lens: list[int]
+) -> tuple[int, int, int, int]:
     import torch
 
     if q.device.type != "cuda":
@@ -50,7 +51,9 @@ def _validate(q: Any, k_pool_layer: Any, v_pool_layer: Any, block_tables: list[l
     batch, num_heads, _ = q.shape
     if not 1 <= batch <= SUPPORTED_MAX_BATCH:
         raise KernelUnsupported(f"batch must be 1..{SUPPORTED_MAX_BATCH}, got {batch}")
-    kv_heads = k_pool_layer.shape[3]
+    if k_pool_layer.shape != v_pool_layer.shape or k_pool_layer.dim() != 4:
+        raise KernelUnsupported("K/V pools must have matching [blocks, slots, heads, dim] shapes")
+    kv_heads = k_pool_layer.shape[2]
     if num_heads % kv_heads != 0:
         raise KernelUnsupported(f"num_heads {num_heads} not divisible by kv_heads {kv_heads}")
     if len(block_tables) != batch or len(seq_lens) != batch:
@@ -98,6 +101,7 @@ def decode_attention_batched(
     q: [B, Hq, D]; pools: [num_blocks, S, KH, D] for one layer; returns [B, Hq, D].
     """
     import torch
+
     batch, num_heads, kv_heads, max_blocks = _validate(
         q, k_pool_layer, v_pool_layer, block_tables, seq_lens
     )
@@ -152,16 +156,32 @@ blocks via the block table, loading 16-key tiles directly from the physical
 pool and maintaining running max/normalizer/accumulator in fp32.
 """
 
+
 @triton.jit
 def _paged_decode_kernel(
-    Q, BT, LEN, KP, VP, OUT,
+    Q,
+    BT,
+    LEN,
+    KP,
+    VP,
+    OUT,
     sm_scale,
     GROUP,
-    stride_qb, stride_qh, stride_qd,
+    stride_qb,
+    stride_qh,
+    stride_qd,
     stride_btb,
-    stride_kn, stride_ks, stride_kh, stride_kd,
-    stride_vn, stride_vs, stride_vh, stride_vd,
-    stride_ob, stride_oh, stride_od,
+    stride_kn,
+    stride_ks,
+    stride_kh,
+    stride_kd,
+    stride_vn,
+    stride_vs,
+    stride_vh,
+    stride_vd,
+    stride_ob,
+    stride_oh,
+    stride_od,
     BLOCK: tl.constexpr,
     HEAD_DIM: tl.constexpr,
 ):
@@ -181,17 +201,18 @@ def _paged_decode_kernel(
 
     for block_index in range(num_blocks):
         phys = tl.load(BT + pid_b * stride_btb + block_index)
-        offs_s = block_index * BLOCK + tl.arange(0, BLOCK)
+        slots = tl.arange(0, BLOCK)
+        positions = block_index * BLOCK + slots
         k_ptrs = (
             KP
             + phys.to(tl.int64) * stride_kn
-            + offs_s[:, None] * stride_ks
+            + slots[:, None] * stride_ks
             + kv_h * stride_kh
             + offs_d[None, :] * stride_kd
         )
-        k_tile = tl.load(k_ptrs).to(tl.float32)          # [BLOCK, HEAD_DIM]
+        k_tile = tl.load(k_ptrs).to(tl.float32)  # [BLOCK, HEAD_DIM]
         scores = tl.sum(k_tile * q[None, :], axis=1) * sm_scale  # [BLOCK]
-        valid = offs_s < seq_len
+        valid = positions < seq_len
         scores = tl.where(valid, scores, float("-inf"))
 
         m_new = tl.maximum(m_i, tl.max(scores, axis=0))
@@ -202,7 +223,7 @@ def _paged_decode_kernel(
         v_ptrs = (
             VP
             + phys.to(tl.int64) * stride_vn
-            + offs_s[:, None] * stride_vs
+            + slots[:, None] * stride_vs
             + kv_h * stride_vh
             + offs_d[None, :] * stride_vd
         )
