@@ -13,6 +13,10 @@ local package intentionally has no ML runtime dependencies.
 > replacement for vLLM. Two intended optimization gates failed, and the results
 > below show them rather than hiding them.
 
+The current release is the measured five-stage baseline. The next milestone is
+the **Ragged L4 Engine** described below; it is a target architecture, not a
+claim about code that has already shipped.
+
 ## Release status
 
 Verified on 2026-08-24:
@@ -73,6 +77,8 @@ See [the architecture walkthrough](docs/architecture.md) and the stage chapters:
 [naive](docs/01-naive.md), [contiguous KV](docs/02-kv-cache.md),
 [continuous batching](docs/03-continuous-batching.md),
 [paged KV](docs/04-paged-kv.md), and [Triton attention](docs/05-triton-attention.md).
+The editable [Excalidraw target architecture](system-architecture.excalidraw.json)
+can be copied into Excalidraw as clipboard JSON.
 
 ## The five stages
 
@@ -90,6 +96,74 @@ decisions are replayed through a temporary contiguous cache and immediately
 discarded. No KV state survives between naïve decode steps. This small,
 documented parity guard preserves the instructional baseline while keeping all
 five greedy outputs deterministic on the tested L4.
+
+## Next milestone: Ragged L4 Engine
+
+The current scheduler rotates across requests but still awaits one complete
+`runner.step(request)` model forward per request. Paged admission also reserves
+`prompt + max_output_tokens` capacity up front. The next milestone replaces
+that execution seam rather than adding another named mode around it.
+
+```text
+waiting + running requests
+          |
+          v
+decode-first token-budget scheduler
+          |
+          v
+BatchPlan(request, query length, context length, sample flag)
+          |
+          v
+transactional demand-paged KV allocation
+          |
+          v
+PackedBatch(input IDs, positions, query offsets, block tables, slot mapping)
+          |
+          v
+one flat Qwen2.5-3B model forward per iteration
+          |
+          v
+ragged paged attention: Torch reference -> L4 Triton kernel
+          |
+          v
+ordered tokens, metrics, and terminal cleanup
+```
+
+The final proof target is one pinned `Qwen/Qwen2.5-3B` revision in FP16,
+one NVIDIA L4, a 4,096-token project context limit, up to 16 active sequences,
+and deterministic greedy generation. The 0.5B model remains the fast regression
+oracle.
+
+The design adds four concrete runtime contracts:
+
+- `BatchPlan`: one iteration's per-request token work under a shared token budget;
+- `PackedBatch`: one flat token axis plus ragged positions, offsets, sequence
+  lengths, block tables, slot mappings, and selected logits positions;
+- transactional KV growth: allocate only blocks crossed by scheduled tokens,
+  with atomic failure and recompute preemption under pressure; and
+- one integrated paged-attention path for mixed decode and chunked-prefill work,
+  using device-resident metadata and no reconstructed logical K/V tensors.
+
+This milestone is complete only when all of these gates pass:
+
+1. A traced model invocation contains multiple request IDs; the transformer is
+   never executed once per scheduled request.
+2. Mixed packed execution matches the sequential oracle token-for-token.
+3. A 4,096-token prompt advances over real prefill chunks without blocking a
+   continuously runnable decode for more than one scheduler iteration.
+4. An intentionally undersized KV pool causes non-zero preemptions and
+   recomputation without OOM, deadlock, token drift, double-free, or leaked blocks.
+5. Torch and Triton ragged attention match over batch sizes `1/2/4/8/16`, block
+   boundaries, mixed query lengths, and contexts through 4,096 tokens.
+6. Warm HTTP arrival-rate sweeps report TTFT, ITL, E2E p50/p95/p99, throughput,
+   SLO goodput, errors, queue depth, preemptions, and raw per-request results.
+7. The same protocol compares the old serial Triton baseline, the new ragged
+   engine, and a pinned vLLM deployment on the same L4 and model revision.
+
+Prefix caching, KV offload, CUDA graphs, quantization, speculative decoding,
+multi-GPU execution, broader APIs, and additional model families are deliberately
+deferred until packed execution, dynamic paging, pressure recovery, and the
+online benchmark gates are working.
 
 ## Quickstart: correctness on a cloud GPU
 
@@ -397,7 +471,7 @@ tests/                       local/CPU tests and L4 correctness matrix
 docs/                        architecture and one chapter per stage
 ```
 
-## Known limitations and next work
+## Current-release limitations
 
 This release supports one pinned base model revision, FP16, a single L4, greedy
 text-only generation, a 2,048-token context, and a narrow Responses-style API.
@@ -405,14 +479,9 @@ It has no sampling, instruction/chat template, quantization, prefix cache,
 chunked prefill, dynamic KV growth, eviction, preemption, cache swapping, CUDA
 graphs, tensor parallelism, multi-GPU support, persistent metrics, or user system.
 
-The highest-value next changes are evidence-driven:
-
-1. Batch active sequences into actual tensor forwards; the current B=1 loop is
-   why iteration-level batching missed its throughput gate.
-2. Allocate paged blocks on demand with an admission-safe capacity policy; eager
-   worst-case reservation missed the memory gate.
-3. Add a paged prefill kernel; Triton decode is direct, but prefill still gathers.
-4. Add kernel autotuning/CUDA graphs only after the first three are measured.
+The Ragged L4 Engine milestone above is the selected path out of these limits.
+Until its gates pass, the repository should be described as a tested educational
+engine baseline, not as a true continuous-batching or production serving engine.
 
 ## Troubleshooting
 
