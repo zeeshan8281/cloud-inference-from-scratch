@@ -259,7 +259,7 @@ def benchmark(mode: str = "contiguous", profile: str = "decode", output: str | N
 def _run_benchmark(mode: str, profile: str) -> dict:
     from benchmarks.run import run_profile
 
-    return run_profile(mode, profile)
+    return json.loads(json.dumps(run_profile(mode, profile)))
 
 
 def _print_benchmark_table(result: dict) -> None:
