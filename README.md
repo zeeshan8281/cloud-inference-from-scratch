@@ -19,8 +19,8 @@ recompute preemption, mixed ragged Triton attention, and authenticated Responses
 JSON/SSE delivery. Heavy execution runs on one serverless NVIDIA L4 through
 Modal; the local package intentionally has no ML runtime dependencies.
 
-> This is tested systems code, not a production service or a replacement for
-> vLLM. The five-stage 0.5B baseline and its failed optimization gates remain
+> This is tested systems code with a production-style contract, not a hosted
+> production service or a replacement for vLLM. The five-stage 0.5B baseline and its failed optimization gates remain
 > published; the sixth stage fixes their architectural causes and is measured
 > against pinned vLLM without hiding the remaining performance gap.
 
@@ -28,9 +28,9 @@ Modal; the local package intentionally has no ML runtime dependencies.
 
 Verified on 2026-08-26:
 
-- 68/68 dependency-light local tests passed; CI repeats them on Python 3.10,
+- 70/70 dependency-light local tests passed; CI repeats them on Python 3.10,
   3.12, and 3.13 with commit-pinned actions.
-- 68/68 tests plus real FastAPI legacy/multi-tenant auth and authorization
+- 70/70 tests plus real FastAPI legacy/multi-tenant auth and authorization
   integration passed in Modal's CPU image; the source-identified result is
   committed and checked by the local suite.
 - 34/34 legacy L4 regression checks passed in 208.3 seconds.
@@ -49,10 +49,15 @@ Verified on 2026-08-26:
 - A candidate major dependency stack (PyTorch 2.13/CUDA 13, Triton 3.7, and
   Transformers 5.15) passed the same packed exact-oracle and CUDA-graph smoke
   on L4; the serving image remains on the release pins until promotion.
+- The opt-in Qwen2.5-3B MLP LLM.int8 capacity mode passed on L4 over a hashed
+  2,040-token corpus and 48 generated sequences: 1.0087x FP16 perplexity,
+  23.5% less steady GPU memory, packed batches of 16, and 2.31x latency. It is
+  explicitly a memory-capacity trade-off; bitsandbytes decode runs eagerly.
 - Ragged Triton matched the Torch oracle at batches 1/2/4/8/16 and contexts
   through 4,002 tokens; worst observed absolute difference was 0.00195. The
   serial Triton kernel also matched at head dimension 128 and context 4,096.
-- Nine fixed-protocol benchmark artifacts were recorded and committed.
+- Fixed-protocol benchmark artifacts were recorded and committed with source
+  identity and acceptance thresholds.
 - A three-way warm HTTP sweep completed 225/225 raw requests without error on
   the same pinned 3B revision and workload hash for serial Triton, Ragged, and
   vLLM 0.10.0.
@@ -66,6 +71,11 @@ Verified on 2026-08-26:
 - A 120-second, concurrency-eight L4 reliability soak completed 1,936 requests:
   1,760 generated, 176 deliberately cancelled, zero failed, zero leaked request
   blocks, 1,752 prefix hits, packed batches of eight, and a clean engine restart.
+
+Evidence-backed readiness for the declared single-GPU, greedy text-generation
+envelope: **production inference engine 9/10, general inference devtool 9/10,
+and NVIDIA cloud-GPU experimentation workbench 9/10**. The exact gates and the
+unearned tenth point are documented in [readiness](docs/readiness.md).
 
 ## What “from scratch” means here
 
@@ -166,10 +176,11 @@ ragged paged attention: Torch reference -> L4 Triton kernel
 ordered tokens, metrics, and terminal cleanup
 ```
 
-The verified target is one pinned `Qwen/Qwen2.5-3B` revision in FP16,
+The default verified target is one pinned `Qwen/Qwen2.5-3B` revision in FP16,
 one NVIDIA L4, a 4,096-token project context limit, up to 16 active sequences,
-and deterministic greedy generation. The 0.5B model remains the fast regression
-oracle.
+and deterministic greedy generation. An opt-in MLP LLM.int8 capacity mode uses
+the same custom scheduler, cache, model, and Triton attention path. The 0.5B
+model remains the fast regression oracle.
 
 The implementation adds four concrete runtime contracts:
 
@@ -198,13 +209,18 @@ Evidence for the acceptance gates:
    SLO goodput, errors, queue depth, preemptions, and raw per-request results.
 8. The same protocol compares the old serial Triton baseline, the new ragged
    engine, and pinned vLLM 0.10.0 on the same L4 and model revision.
+9. The quantized path must keep perplexity within 5% of FP16 over at least 2,000
+   hashed corpus tokens, reduce steady GPU memory by at least 20%, retain packed
+   batches of 16, and stay within the declared 2.5x capacity-mode latency ceiling.
 
 Gates 1–6 passed in the 20-check L4 suite. Gate 7 passed in the authenticated
 225-request HTTP sweep retained per request in the three-way artifact. Gate 8 uses
 the same workload hash, source identity, 3B revision, L4, active-sequence cap,
 token budget, greedy decoding, and EOS behavior across all implementations.
+Gate 9 passed on Qwen2.5-3B/L4 with 1.0087x perplexity, 23.5% lower steady
+memory, 16-request packed forwards, and 2.31x latency.
 
-KV offload, quantization, speculative decoding,
+KV offload, speculative decoding,
 multi-GPU execution, broader APIs, and additional model families remain
 deliberately deferred beyond this packed/demand-paged milestone.
 
@@ -237,14 +253,16 @@ modal run nvidia_profile.py
 modal run reliability.py --duration-seconds 120
 modal run -w artifacts/ragged-a100-correctness.json modal_app.py::remote_ragged_a100_tests
 modal run -w artifacts/compatibility-candidate-l4.json modal_app.py::compatibility_smoke
+modal run -w artifacts/quantization-int8-mlp-qwen3b-l4.json modal_app.py::quantization_benchmark
 modal run -w artifacts/llama-ragged-l4.json modal_app.py::llama_ragged_smoke
 modal run -w artifacts/cuda-graph-l4.json modal_app.py::cuda_graph_benchmark
 ```
 
 The first command writes NVIDIA AIPerf's native multi-run records. The second
 writes an Nsight `.nsys-rep`, a PyTorch CUDA trace, checksums, source identity,
-and profiler capability flags. The final three commands capture the A100
-correctness suite, Llama-family oracle proof, and paired CUDA-graph benchmark.
+and profiler capability flags. The remaining commands capture A100 correctness,
+candidate-stack compatibility, quantized capacity, Llama-family oracle, and
+paired CUDA-graph evidence.
 These commands refuse to publish an artifact when their workload or report
 validation fails. The reliability runner additionally
 injects deterministic cancellations and rebuilds the engine after timed load.
@@ -341,6 +359,22 @@ median batch latency from 1,393 ms to 431 ms (3.24x). Runtime metrics recorded
 one graph capture and 99 replays. Graphs are bounded to decode batches
 1/2/4/8/16; other shapes execute eagerly instead of growing graph memory without
 limit.
+
+### Quantized capacity mode
+
+The optional `bitsandbytes_int8` engine configuration quantizes only MLP linear
+weights with bitsandbytes LLM.int8 and retains FP16 attention, embeddings,
+normalization, KV cache, and logits. The committed [paired L4 artifact](artifacts/quantization-int8-mlp-qwen3b-l4.json)
+uses Qwen2.5-3B, a SHA-256-identified 2,040-token README corpus, and 48 generated
+sequences per mode. Against FP16 it measured 1.0087x perplexity, 23.5% less
+steady allocated GPU memory, and 2.31x batch latency while both modes packed 16
+requests into one forward. Generated-token disagreement is retained in the raw
+artifact; it is not disguised as exact parity.
+
+This mode is for fitting more model capacity, not accelerating small-batch
+decode. bitsandbytes invalidates CUDA Graph capture in this stack, so the paired
+measurement disables graphs on both sides; the default FP16 path keeps its
+separately proven 3.24x graph replay optimization.
 
 ### Reliability soak
 
@@ -724,15 +758,16 @@ docs/                        architecture and one chapter per stage
 
 ## Current-release limitations
 
-The deployed release supports one pinned 3B Qwen revision; the separate Llama
-path is correctness-verified but not exposed by that endpoint. Both paths are
-FP16-only. Serving uses a single L4, greedy text-only generation, a 4,096-token
+The deployed endpoint defaults to one pinned FP16 3B Qwen revision; the separate
+Llama path and opt-in MLP LLM.int8 capacity mode are verified but not selected
+by that endpoint. Serving uses a single L4, greedy text-only generation, a 4,096-token
 project context limit, and a narrow Responses-style API. It has no sampling, instruction/chat template,
-quantization, cache swapping/offload, fused non-
+cache swapping/offload, fused non-
 attention kernels, speculative decoding, tensor parallelism, multi-GPU support,
 persistent application metrics or a user-management system.
 
-It is a real packed inference engine with bounded scope, not a production stack.
+It is a real packed inference engine with a bounded production-style envelope,
+not a turnkey fleet-scale production stack.
 The vLLM comparison quantifies the remaining kernel/runtime optimization gap.
 
 ## Troubleshooting

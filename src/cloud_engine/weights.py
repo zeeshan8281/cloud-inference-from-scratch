@@ -126,6 +126,7 @@ def load_model(
     attn_backend: Any,
     dtype: Any = None,
     device: str = "cuda",
+    quantization: str = "none",
 ) -> tuple[Qwen2CausalLM, ModelDims]:
     """Build the engine model and load verified weights strictly."""
     import torch
@@ -141,6 +142,32 @@ def load_model(
         raise RuntimeError(f"state dict mismatch: {incompatible}")
     model.eval()
     model.requires_grad_(False)
+    if quantization == "bitsandbytes_int8":
+        import bitsandbytes as bnb
+
+        def convert_linears(parent: Any, prefix: str = "") -> None:
+            for name, child in tuple(parent.named_children()):
+                fqn = f"{prefix}.{name}" if prefix else name
+                if isinstance(child, torch.nn.Linear) and ".mlp." in f".{fqn}.":
+                    target = bnb.nn.Linear8bitLt(
+                        child.in_features,
+                        child.out_features,
+                        bias=child.bias is not None,
+                        has_fp16_weights=False,
+                        threshold=6.0,
+                        device="cpu",
+                    )
+                    target.load_state_dict(
+                        {key: value.detach().cpu() for key, value in child.state_dict().items()}
+                    )
+                    setattr(parent, name, target.to(device))
+                else:
+                    convert_linears(child, fqn)
+
+        convert_linears(model)
+        model.requires_grad_(False)
+    elif quantization != "none":
+        raise ValueError(f"unsupported quantization {quantization!r}")
     return model, dims
 
 

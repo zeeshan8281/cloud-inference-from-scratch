@@ -104,6 +104,21 @@ class TestCommittedEvidence(unittest.TestCase):
         self.assertGreaterEqual(result["max_forward_request_count"], 4)
         self.assertGreaterEqual(result["cuda_graph_replays"], 1)
 
+    def test_quantized_capacity_gate(self) -> None:
+        result = json.loads(
+            (ARTIFACTS / "quantization-int8-mlp-qwen3b-l4.json").read_text()
+        )
+        self.assertTrue(result["passed"])
+        self.assertNotIn("unknown", result["source_revision"])
+        self.assertEqual(result["gpu"], "NVIDIA L4")
+        self.assertEqual(result["quantization"], "bitsandbytes-llm-int8")
+        self.assertGreaterEqual(result["teacher_forced_tokens"], 2_000)
+        self.assertLessEqual(result["perplexity_ratio"], 1.05)
+        self.assertGreaterEqual(result["steady_memory_reduction_percent"], 20)
+        self.assertLessEqual(result["latency_ratio"], 2.5)
+        self.assertGreaterEqual(result["int8"]["max_forward_request_count"], 16)
+        self.assertEqual(result["int8"]["cuda_graph_captures"], 0)
+
     def test_experiment_correctness_gate(self) -> None:
         result = json.loads(
             (ARTIFACTS / "experiment-short-prefill-first-summary.json").read_text()

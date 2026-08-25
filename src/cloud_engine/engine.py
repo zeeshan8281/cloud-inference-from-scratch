@@ -618,7 +618,13 @@ class InferenceEngine:
         else:  # pragma: no cover - validated in config
             raise ValueError(f"unsupported mode {self.config.mode}")
 
-        self.model, _ = load_model(self.model_dir, attn_backend, dtype=dtype, device=self.device)
+        self.model, _ = load_model(
+            self.model_dir,
+            attn_backend,
+            dtype=dtype,
+            device=self.device,
+            quantization=self.config.quantization,
+        )
         self.tokenizer = load_tokenizer(self.model_dir)
         if self.config.mode == "naive":
             self.runner = NaiveRunner(self.config, self.model, self.cache, self.device)

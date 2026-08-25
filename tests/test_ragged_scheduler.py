@@ -94,6 +94,18 @@ async def consume(request) -> list[int]:
 
 
 class TestRaggedScheduler(unittest.IsolatedAsyncioTestCase):
+    async def test_quantization_mode_is_validated(self) -> None:
+        self.assertEqual(
+            build_config(
+                "ragged",
+                pinned=PINNED,
+                quantization="bitsandbytes_int8",
+            ).quantization,
+            "bitsandbytes_int8",
+        )
+        with self.assertRaisesRegex(ValueError, "quantization"):
+            build_config("ragged", pinned=PINNED, quantization="int3")
+
     async def test_ragged_context_limit_matches_kernel_envelope(self) -> None:
         with self.assertRaisesRegex(ValueError, "max_model_len <= 4096"):
             build_config("ragged", pinned=PINNED, max_model_len=4097)

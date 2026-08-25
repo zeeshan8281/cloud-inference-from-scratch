@@ -76,5 +76,8 @@
     "pydantic": "2.13.4",
     "httpx": "0.28.1",
     "uvicorn": "0.52.4"
+  },
+  "quantization": {
+    "bitsandbytes": "0.50.1"
   }
 }

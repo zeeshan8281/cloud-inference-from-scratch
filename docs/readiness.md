@@ -23,11 +23,17 @@ oracle parity passes on both Qwen2 and Llama-family checkpoints.
 CUDA graph decode has exact-token and 3.24x paired L4 evidence. A candidate
 PyTorch 2.13/CUDA 13, Triton 3.7, and Transformers 5.15 stack passed packed
 exact-oracle and CUDA-graph execution on L4; the release stack remains pinned
-until promotion. Quantization remains open. Secret-backed tenant policies enforce
+until promotion. The opt-in MLP LLM.int8 capacity path passed its paired
+Qwen2.5-3B/L4 gate over 2,040 hashed teacher-forced tokens and 48 generated
+sequences: 1.0087x FP16 perplexity, 23.5% less steady GPU memory, packed batches
+of 16, and 2.31x latency. Its eager-only execution and generated-token drift are
+reported as capacity-mode trade-offs, not hidden. Secret-backed tenant policies enforce
 per-tenant concurrency, rolling token budgets, and admin-only metrics; prompt-free
 structured audit logs survive container teardown under Modal's plan retention
-and can be exported through its OpenTelemetry integration. This is therefore not
-yet a 9/10 production engine.
+and can be exported through its OpenTelemetry integration. Every gate above now
+passes for the declared single-GPU, greedy text-generation envelope, earning
+9/10; the tenth point still requires sustained independent adoption and
+multi-release operating history.
 
 ## General inference devtool
 

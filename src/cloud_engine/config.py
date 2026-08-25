@@ -29,6 +29,7 @@ class EngineConfig:
     model_revision: str
     mode: Mode
     dtype: Literal["float16"]
+    quantization: Literal["none", "bitsandbytes_int8"]
     max_model_len: int
     max_output_tokens: int
     eos_token_id: int | None
@@ -85,6 +86,7 @@ def build_config(
         model_revision=model["revision"],
         mode=mode,
         dtype="float16",
+        quantization=model.get("quantization", "none"),
         max_model_len=model["max_model_len"],
         max_output_tokens=model["max_output_tokens"],
         eos_token_id=model.get("eos_token_id"),
@@ -114,6 +116,8 @@ def validate_config(config: EngineConfig) -> None:
         raise ValueError(f"mode must be one of {ALL_MODES}, got {config.mode!r}")
     if config.dtype != "float16":
         raise ValueError("v1 supports float16 only (PRD FR1)")
+    if config.quantization not in {"none", "bitsandbytes_int8"}:
+        raise ValueError("quantization must be 'none' or 'bitsandbytes_int8'")
     if config.max_output_tokens < 1:
         raise ValueError("max_output_tokens must be positive")
     if config.max_batched_tokens < 1 or config.prefill_chunk_size < 1:

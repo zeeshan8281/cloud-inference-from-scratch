@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "source_revision": "e3b86aded7d11e04987968012d1f25863e0995a2+tree-62ba2f121a84",
+  "source_revision": "9dd1eac9dce74e4e98b1336174fe79c6ac05938f+tree-51340d7c5869",
   "passed": true,
-  "unit_tests": 68,
+  "unit_tests": 70,
   "fastapi_checks": [
     "legacy_auth",
     "admin_metrics",

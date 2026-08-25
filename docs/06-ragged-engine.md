@@ -76,8 +76,9 @@ artifact is not presented as a memory-normalized capacity comparison.
 
 ## Deliberate limits
 
-This is a focused single-GPU engine, not a vLLM replacement. It has no CUDA
-graphs, fused MLP/RMSNorm/RoPE kernels, speculative decoding,
-quantization, swap/offload, distributed execution, or instruction-template
-layer. The benchmark is expected to expose those missing optimizations rather
-than conceal them.
+This is a focused single-GPU engine, not a vLLM replacement. The default FP16
+path has bounded decode CUDA graphs; an opt-in, eager MLP LLM.int8 capacity mode
+is measured separately. It still has no fused MLP/RMSNorm/RoPE kernels,
+speculative decoding, swap/offload, distributed execution, or
+instruction-template layer. The benchmarks expose those limits rather than
+conceal them.

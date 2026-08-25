@@ -23,6 +23,7 @@ import modal
 PINNED = json.loads(Path(__file__).parent.joinpath("engine_config.json").read_text())
 IMAGE_PINS = PINNED["image"]
 COMPATIBILITY_CANDIDATE = PINNED["compatibility_candidate"]
+QUANTIZATION_PINS = PINNED["quantization"]
 MODEL = PINNED["model"]
 RAGGED_MODEL = PINNED["ragged_model"]
 LLAMA_MODEL = PINNED["llama_model"]
@@ -92,6 +93,11 @@ image = (
         copy=True,
     )
     .add_local_file(
+        Path(__file__).parent / "README.md",
+        "/root/README.md",
+        copy=True,
+    )
+    .add_local_file(
         Path(__file__).parent / "engine_config.json",
         "/root/engine_config.json",
         copy=True,
@@ -108,6 +114,9 @@ image = (
 
 compatibility_image = image.pip_install(
     *(f"{package.replace('_', '-')}=={version}" for package, version in COMPATIBILITY_CANDIDATE.items())
+)
+quantization_image = compatibility_image.pip_install(
+    f"bitsandbytes=={QUANTIZATION_PINS['bitsandbytes']}"
 )
 
 vllm_image = (
@@ -287,7 +296,9 @@ def ragged_smoke() -> dict:
     return _execute_ragged_smoke(MODEL, "ragged smoke: real multi-request forward")
 
 
-def _execute_ragged_smoke(model_spec: dict, label: str) -> dict:
+def _execute_ragged_smoke(
+    model_spec: dict, label: str, quantization: str = "none"
+) -> dict:
     import asyncio
 
     from cloud_engine.config import build_config
@@ -302,6 +313,7 @@ def _execute_ragged_smoke(model_spec: dict, label: str) -> dict:
         model_revision=model_spec["revision"],
         max_model_len=model_spec["max_model_len"],
         eos_token_id=model_spec["eos_token_id"],
+        quantization=quantization,
     )
     engine = InferenceEngine(config, model_dir=model_dir)
     prompts = (
@@ -391,6 +403,216 @@ def compatibility_smoke() -> str:
         package: version(package.replace("_", "-"))
         for package in COMPATIBILITY_CANDIDATE
     }
+    return json.dumps(result, indent=2) + "\n"
+
+
+@app.function(**_gpu_options(image=quantization_image, timeout=3600))
+def quantization_benchmark() -> str:
+    """Paired 3B FP16/LLM.int8 quality, memory, and batch-latency measurement."""
+    import asyncio
+    import gc
+    import math
+    import statistics
+
+    import torch
+
+    from cloud_engine.config import build_config
+    from cloud_engine.engine import InferenceEngine
+    from cloud_engine.scheduler import GenerationConfig
+
+    _print_run_header("paired Qwen2.5-3B FP16 vs LLM.int8 benchmark")
+    model_dir = _prepare_weights(RAGGED_MODEL)
+    prompts = (
+        "Explain why paged KV caches reduce fragmentation.",
+        "Give two invariants for continuous batching.",
+        "What does a Triton program instance execute?",
+        "Describe the purpose of recompute preemption.",
+        "Why does online softmax improve attention memory use?",
+        "Define time to first token in one sentence.",
+        "What problem does prefix caching solve?",
+        "Name one risk of an unbounded request queue.",
+        "Explain grouped-query attention briefly.",
+        "Why pin a model revision in production?",
+        "What is a CUDA graph replay?",
+        "Describe backpressure for streaming tokens.",
+        "Why isolate tenants with admission quotas?",
+        "What does an NVTX range provide?",
+        "Explain a paged KV block table.",
+        "Why benchmark against a correctness oracle?",
+    )
+
+    async def run(quantization: str) -> dict:
+        torch.cuda.empty_cache()
+        baseline_bytes = torch.cuda.memory_allocated()
+        config = build_config(
+            "ragged",
+            model_id=RAGGED_MODEL["id"],
+            model_revision=RAGGED_MODEL["revision"],
+            max_model_len=RAGGED_MODEL["max_model_len"],
+            eos_token_id=RAGGED_MODEL["eos_token_id"],
+            prefix_cache_max_blocks=0,
+            cuda_graph_decode=False,
+            dtype="float16",
+            quantization=quantization,
+        )
+        engine = InferenceEngine(config, model_dir=model_dir)
+        await engine.start()
+        torch.cuda.synchronize()
+        steady_bytes = torch.cuda.memory_allocated() - baseline_bytes
+        torch.cuda.reset_peak_memory_stats()
+
+        from cloud_engine.attention import AttentionBackend
+
+        dims = engine.model.dims
+        runtime_backend = engine.model.attn_backend
+        engine.model.attn_backend = AttentionBackend(
+            None, dims.num_heads, dims.num_kv_heads, dims.head_dim
+        )
+        quality_text = Path("/root/README.md").read_text(encoding="utf-8")
+        quality_ids = engine.tokenizer.encode(quality_text)[:2048]
+        quality_chunks = [
+            quality_ids[start : start + 256]
+            for start in range(0, len(quality_ids), 256)
+        ]
+        teacher_top1 = []
+        teacher_nll = 0.0
+        teacher_tokens = 0
+        with torch.no_grad():
+            for token_ids in quality_chunks:
+                input_ids = torch.tensor(
+                    token_ids,
+                    dtype=torch.long,
+                    device=engine.device,
+                )
+                logits = engine.model(input_ids, ctx=None, return_all_logits=True)
+                teacher_top1.extend(logits[:-1].argmax(dim=-1).cpu().tolist())
+                teacher_nll += float(
+                    torch.nn.functional.cross_entropy(
+                        logits[:-1], input_ids[1:], reduction="sum"
+                    )
+                )
+                teacher_tokens += input_ids.numel() - 1
+        engine.model.attn_backend = runtime_backend
+
+        async def generate(items: tuple[str, ...]) -> list[list[int]]:
+            handles = [
+                await engine.submit(
+                    prompt,
+                    GenerationConfig(max_output_tokens=8, eos_token_id=None),
+                )
+                for prompt in items
+            ]
+            results = await asyncio.gather(*(handle.wait() for handle in handles))
+            torch.cuda.synchronize()
+            return [result.token_ids for result in results]
+
+        await generate(tuple(f"warmup: {prompt}" for prompt in prompts))
+        timings = []
+        outputs = []
+        for trial in range(3):
+            started = time.perf_counter()
+            outputs.append(
+                await generate(tuple(f"trial {trial}: {prompt}" for prompt in prompts))
+            )
+            timings.append((time.perf_counter() - started) * 1000)
+        snapshot = engine.snapshot_metrics()["scheduler"]
+        result = {
+            "steady_gpu_memory_bytes": steady_bytes,
+            "peak_gpu_memory_bytes": torch.cuda.max_memory_allocated(),
+            "batch_latency_ms": timings,
+            "median_batch_latency_ms": statistics.median(timings),
+            "outputs": outputs,
+            "teacher_top1": teacher_top1,
+            "teacher_nll": teacher_nll,
+            "teacher_tokens": teacher_tokens,
+            "quality_corpus_sha256": sha256(quality_text.encode()).hexdigest(),
+            "max_forward_request_count": snapshot["max_forward_request_count"],
+            "cuda_graph_captures": snapshot["cuda_graph_captures"],
+            "cuda_graph_replays": snapshot["cuda_graph_replays"],
+        }
+        await engine.close()
+        engine = None
+        gc.collect()
+        torch.cuda.empty_cache()
+        return result
+
+    fp16 = asyncio.run(run("none"))
+    int8 = asyncio.run(run("bitsandbytes_int8"))
+    fp16_top1 = fp16.pop("teacher_top1")
+    int8_top1 = int8.pop("teacher_top1")
+    teacher_top1_agreement = sum(
+        reference == quantized
+        for reference, quantized in zip(fp16_top1, int8_top1, strict=True)
+    ) / len(fp16_top1)
+    teacher_tokens = fp16.pop("teacher_tokens")
+    if teacher_tokens != int8.pop("teacher_tokens"):
+        raise RuntimeError("teacher-forced token counts differ")
+    fp16_nll = fp16.pop("teacher_nll") / teacher_tokens
+    int8_nll = int8.pop("teacher_nll") / teacher_tokens
+    perplexity_ratio = math.exp(int8_nll - fp16_nll)
+    quality_corpus_sha256 = fp16.pop("quality_corpus_sha256")
+    if quality_corpus_sha256 != int8.pop("quality_corpus_sha256"):
+        raise RuntimeError("quality corpus hashes differ")
+    exact = fp16["outputs"] == int8["outputs"]
+    paired = [
+        (reference, quantized)
+        for reference_trial, quantized_trial in zip(
+            fp16["outputs"], int8["outputs"], strict=True
+        )
+        for reference, quantized in zip(
+            reference_trial, quantized_trial, strict=True
+        )
+    ]
+    first_token_agreement = sum(a[0] == b[0] for a, b in paired) / len(paired)
+    token_agreement = sum(
+        reference == quantized
+        for a, b in paired
+        for reference, quantized in zip(a, b, strict=True)
+    ) / sum(len(a) for a, _ in paired)
+    memory_ratio = int8["steady_gpu_memory_bytes"] / fp16["steady_gpu_memory_bytes"]
+    latency_ratio = int8["median_batch_latency_ms"] / fp16["median_batch_latency_ms"]
+    passed = (
+        perplexity_ratio <= 1.05
+        and memory_ratio < 0.8
+        and latency_ratio <= 2.5
+    )
+    result = {
+        "schema_version": 1,
+        "source_revision": os.environ.get("SOURCE_COMMIT", SOURCE_COMMIT),
+        "model": RAGGED_MODEL["id"],
+        "model_revision": RAGGED_MODEL["revision"],
+        "gpu": torch.cuda.get_device_name(0),
+        "compute_capability": list(torch.cuda.get_device_capability()),
+        "quantization": "bitsandbytes-llm-int8",
+        "stack": {
+            "torch": torch.__version__,
+            "bitsandbytes": QUANTIZATION_PINS["bitsandbytes"],
+        },
+        "passed": passed,
+        "exact_token_parity": exact,
+        "teacher_forced_top1_agreement": teacher_top1_agreement,
+        "teacher_forced_tokens": teacher_tokens,
+        "quality_corpus": "README.md first 2048 tokenizer tokens",
+        "quality_corpus_sha256": quality_corpus_sha256,
+        "fp16_mean_nll": fp16_nll,
+        "int8_mean_nll": int8_nll,
+        "perplexity_ratio": perplexity_ratio,
+        "first_token_agreement": first_token_agreement,
+        "positional_token_agreement": token_agreement,
+        "measured_sequences_per_mode": 48,
+        "tokens_per_sequence": 8,
+        "steady_memory_ratio": memory_ratio,
+        "steady_memory_reduction_percent": (1 - memory_ratio) * 100,
+        "latency_ratio": latency_ratio,
+        "fp16": fp16,
+        "int8": int8,
+    }
+    print(
+        f"teacher top1/PPL ratio {teacher_top1_agreement:.1%}/{perplexity_ratio:.4f}; "
+        f"generated first/positional {first_token_agreement:.1%}/{token_agreement:.1%}; "
+        f"steady memory -{result['steady_memory_reduction_percent']:.1f}%; "
+        f"latency ratio {latency_ratio:.2f}x; passed={passed}"
+    )
     return json.dumps(result, indent=2) + "\n"
 
 
