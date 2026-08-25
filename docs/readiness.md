@@ -29,9 +29,11 @@ therefore not yet a 9/10 production engine.
 - Machine-readable, source-identified, correctness-gated artifacts.
 - Contributor documentation and stable examples across supported models.
 
-The demo, scheduler template, NVIDIA AIPerf runner, and GPU profiler are working.
-The extension surface is still scheduler-priority-only and model support is
-narrow, so this category is not yet 9/10.
+The demo, NVIDIA AIPerf runner, and GPU profiler are working. Experiments can
+change scheduling order, preemption victim selection, active-sequence limits,
+batch token budgets, and prefill chunk size; they emit raw and compact artifacts
+only after correctness gates pass. Model support remains narrow, so this
+category is not yet 9/10.
 
 ## NVIDIA-native experimentation workbench
 

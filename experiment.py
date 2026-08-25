@@ -28,18 +28,42 @@ async def run_experiment(
     from benchmarks.online import run_engine_sweep
     from cloud_engine.config import build_config
     from cloud_engine.engine import InferenceEngine
-    from cloud_engine.scheduler import GenerationConfig, decode_first_priority
+    from cloud_engine.scheduler import (
+        GenerationConfig,
+        decode_first_priority,
+        largest_sequence_preemption,
+    )
     from cloud_engine.weights import load_tokenizer
 
     namespace: dict = {}
     exec(compile(source, "<experiment>", "exec"), namespace)
     priority = namespace.get("priority")
-    if not callable(priority):
-        raise ValueError("experiment must define priority(candidate)")
+    preemption_priority = namespace.get("preemption_priority")
+    overrides = namespace.get("CONFIG_OVERRIDES", {})
+    if priority is not None and not callable(priority):
+        raise ValueError("priority must be callable")
+    if preemption_priority is not None and not callable(preemption_priority):
+        raise ValueError("preemption_priority must be callable")
+    if not isinstance(overrides, dict):
+        raise ValueError("CONFIG_OVERRIDES must be a dict")
+    allowed_overrides = {
+        "max_active_sequences",
+        "max_batched_tokens",
+        "prefill_chunk_size",
+    }
+    unknown = set(overrides) - allowed_overrides
+    if unknown:
+        raise ValueError(f"unsupported CONFIG_OVERRIDES: {sorted(unknown)}")
+    if not priority and not preemption_priority and not overrides:
+        raise ValueError(
+            "define priority(candidate), preemption_priority(candidate), or CONFIG_OVERRIDES"
+        )
 
     model_dir = _prepare_weights(RAGGED_MODEL)
     tokenizer = load_tokenizer(model_dir)
-    engine = InferenceEngine(build_config("ragged"), model_dir=model_dir)
+    baseline_config = build_config("ragged")
+    experiment_config = build_config("ragged", **overrides)
+    engine = InferenceEngine(baseline_config, model_dir=model_dir)
     await engine.start()
 
     prompts = [
@@ -56,10 +80,22 @@ async def run_experiment(
 
         return await asyncio.gather(*(generate(prompt) for prompt in prompts))
 
+    def apply_settings(config, scheduling, preemption) -> None:
+        engine.config = config
+        engine.scheduler.config = config
+        engine.scheduler.scheduling_priority = scheduling
+        engine.scheduler.preemption_priority = preemption
+
     try:
-        engine.scheduler.scheduling_priority = decode_first_priority
+        apply_settings(
+            baseline_config, decode_first_priority, largest_sequence_preemption
+        )
         baseline_tokens = await generate_all()
-        engine.scheduler.scheduling_priority = priority
+        apply_settings(
+            experiment_config,
+            priority or decode_first_priority,
+            preemption_priority or largest_sequence_preemption,
+        )
         experiment_tokens = await generate_all()
         checks = {
             "token_parity": baseline_tokens == experiment_tokens,
@@ -70,12 +106,18 @@ async def run_experiment(
             raise RuntimeError(f"correctness gate failed: {checks}")
 
         parsed_rates = [float(value) for value in rates.split(",")]
-        engine.scheduler.scheduling_priority = decode_first_priority
+        apply_settings(
+            baseline_config, decode_first_priority, largest_sequence_preemption
+        )
         baseline = await run_engine_sweep(
             engine, tokenizer, parsed_rates, duration_seconds, 500, 100,
             implementation="ragged-l4/default-policy",
         )
-        engine.scheduler.scheduling_priority = priority
+        apply_settings(
+            experiment_config,
+            priority or decode_first_priority,
+            preemption_priority or largest_sequence_preemption,
+        )
         experiment = await run_engine_sweep(
             engine, tokenizer, parsed_rates, duration_seconds, 500, 100,
             implementation=f"ragged-l4/{namespace.get('NAME', 'experiment')}",
@@ -93,6 +135,9 @@ async def run_experiment(
                 "name": namespace.get("NAME", "experiment"),
                 "hypothesis": namespace.get("HYPOTHESIS", ""),
                 "sha256": hashlib.sha256(source.encode()).hexdigest(),
+                "config_overrides": overrides,
+                "custom_scheduling_priority": priority is not None,
+                "custom_preemption_priority": preemption_priority is not None,
             },
             "correctness": checks,
             "baseline": baseline,
@@ -100,6 +145,37 @@ async def run_experiment(
         }
     finally:
         await engine.close()
+
+
+def _compact(result: dict) -> dict:
+    def compact_run(run: dict) -> dict:
+        return {
+            "implementation": run["implementation"],
+            "workload_hash": run["workload_hash"],
+            "sweeps": [
+                {
+                    key: sweep[key]
+                    for key in (
+                        "arrival_rate_requests_per_second",
+                        "latency",
+                        "throughput",
+                        "requests",
+                        "queue",
+                        "preemptions",
+                        "recomputed_tokens",
+                    )
+                }
+                for sweep in run["sweeps"]
+            ],
+        }
+
+    return {
+        "source_revision": result["source_revision"],
+        "experiment": result["experiment"],
+        "correctness": result["correctness"],
+        "baseline": compact_run(result["baseline"]),
+        "result": compact_run(result["result"]),
+    }
 
 
 @app.local_entrypoint()
@@ -115,5 +191,7 @@ def main(
     destination = Path(output or f"artifacts/experiment-{result['experiment']['name']}.json")
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(result, indent=2) + "\n")
+    summary = destination.with_name(f"{destination.stem}-summary.json")
+    summary.write_text(json.dumps(_compact(result), indent=2) + "\n")
     print(json.dumps(result["correctness"], indent=2))
-    print(f"artifact: {destination}")
+    print(f"artifacts: {summary} (compact), {destination} (raw)")

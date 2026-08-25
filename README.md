@@ -24,8 +24,8 @@ runtime dependencies.
 
 Verified on 2026-08-26:
 
-- 52/52 dependency-light local tests passed.
-- 52/52 tests plus real FastAPI route/auth integration passed in Modal's CPU image.
+- 53/53 dependency-light local tests passed.
+- 53/53 tests plus real FastAPI route/auth integration passed in Modal's CPU image.
 - 34/34 legacy L4 regression checks passed in 208.3 seconds.
 - 16/16 Qwen2.5-3B Ragged L4 checks passed in 63.1 seconds: exact HF tokens,
   four request IDs in one transformer invocation, 4,000-token chunked prefill,
@@ -192,16 +192,18 @@ For a recording-ready walkthrough of the deployed engine:
 modal run demo.py
 ```
 
-To change the scheduling policy and measure it against the production default,
-copy the [starter experiment](experiments/starter.py), edit `priority(candidate)`,
-and run:
+To change scheduling order, capacity-pressure victim selection, or safe batching
+knobs and measure them against the production default, copy the
+[starter experiment](experiments/starter.py) and run:
 
 ```bash
 modal run experiment.py --experiment experiments/starter.py
 ```
 
 This refuses to benchmark unless token parity, packed execution, and KV cleanup
-pass first, then writes both baseline and experiment results to `artifacts/`.
+pass first, then writes raw and compact baseline/experiment results to
+`artifacts/`. The committed [compact starter result](artifacts/experiment-short-prefill-first-summary.json)
+records 70/70 requests without error across baseline and experiment sweeps.
 
 For standardized endpoint load data and GPU timelines:
 

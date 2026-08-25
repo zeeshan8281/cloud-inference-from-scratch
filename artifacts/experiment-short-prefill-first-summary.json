@@ -1,0 +1,223 @@
+{
+  "source_revision": "3c9ea3dc2a3b9a37dedeb6fab117071b878de96d+tree-293cbba80812",
+  "experiment": {
+    "name": "short-prefill-first",
+    "hypothesis": "Short prefills reduce queueing and TTFT without changing generated tokens.",
+    "sha256": "55f0a41e7ab914e501648a81dd226215ea63a8d8014214f3ace087a239947ccf",
+    "config_overrides": {
+      "prefill_chunk_size": 128
+    },
+    "custom_scheduling_priority": true,
+    "custom_preemption_priority": true
+  },
+  "correctness": {
+    "token_parity": true,
+    "packed_forward": true,
+    "zero_live_kv_blocks": true,
+    "zero_failed_requests": true
+  },
+  "baseline": {
+    "implementation": "ragged-l4/default-policy",
+    "workload_hash": "b890b43818e960e3",
+    "sweeps": [
+      {
+        "arrival_rate_requests_per_second": 1.0,
+        "latency": {
+          "ttft_p50_ms": 95.245,
+          "ttft_p95_ms": 105.688,
+          "ttft_p99_ms": 107.168,
+          "itl_p50_ms": 64.254,
+          "itl_p95_ms": 66.255,
+          "itl_p99_ms": 66.896,
+          "e2e_p50_ms": 2075.356,
+          "e2e_p95_ms": 2154.084,
+          "e2e_p99_ms": 2163.243
+        },
+        "throughput": {
+          "output_tokens_per_second": 26.346,
+          "completed_requests_per_second": 0.823,
+          "slo_goodput_requests_per_second": 0.659
+        },
+        "requests": {
+          "offered": 5,
+          "completed": 5,
+          "errors": 0,
+          "slo_good": 4
+        },
+        "queue": {
+          "available": true,
+          "mean_depth": 0.014,
+          "max_depth": 1
+        },
+        "preemptions": 0,
+        "recomputed_tokens": 0
+      },
+      {
+        "arrival_rate_requests_per_second": 2.0,
+        "latency": {
+          "ttft_p50_ms": 93.831,
+          "ttft_p95_ms": 122.919,
+          "ttft_p99_ms": 123.734,
+          "itl_p50_ms": 64.155,
+          "itl_p95_ms": 65.725,
+          "itl_p99_ms": 74.99,
+          "e2e_p50_ms": 2087.833,
+          "e2e_p95_ms": 2123.115,
+          "e2e_p99_ms": 2123.619
+        },
+        "throughput": {
+          "output_tokens_per_second": 48.542,
+          "completed_requests_per_second": 1.517,
+          "slo_goodput_requests_per_second": 1.517
+        },
+        "requests": {
+          "offered": 10,
+          "completed": 10,
+          "errors": 0,
+          "slo_good": 10
+        },
+        "queue": {
+          "available": true,
+          "mean_depth": 0.041,
+          "max_depth": 1
+        },
+        "preemptions": 0,
+        "recomputed_tokens": 0
+      },
+      {
+        "arrival_rate_requests_per_second": 4.0,
+        "latency": {
+          "ttft_p50_ms": 91.157,
+          "ttft_p95_ms": 134.319,
+          "ttft_p99_ms": 147.63,
+          "itl_p50_ms": 65.61,
+          "itl_p95_ms": 71.027,
+          "itl_p99_ms": 118.39,
+          "e2e_p50_ms": 2170.703,
+          "e2e_p95_ms": 2218.501,
+          "e2e_p99_ms": 2237.89
+        },
+        "throughput": {
+          "output_tokens_per_second": 92.955,
+          "completed_requests_per_second": 2.905,
+          "slo_goodput_requests_per_second": 1.743
+        },
+        "requests": {
+          "offered": 20,
+          "completed": 20,
+          "errors": 0,
+          "slo_good": 12
+        },
+        "queue": {
+          "available": true,
+          "mean_depth": 0.08,
+          "max_depth": 1
+        },
+        "preemptions": 0,
+        "recomputed_tokens": 0
+      }
+    ]
+  },
+  "result": {
+    "implementation": "ragged-l4/short-prefill-first",
+    "workload_hash": "b890b43818e960e3",
+    "sweeps": [
+      {
+        "arrival_rate_requests_per_second": 1.0,
+        "latency": {
+          "ttft_p50_ms": 89.136,
+          "ttft_p95_ms": 120.587,
+          "ttft_p99_ms": 121.767,
+          "itl_p50_ms": 64.256,
+          "itl_p95_ms": 66.192,
+          "itl_p99_ms": 67.259,
+          "e2e_p50_ms": 2080.399,
+          "e2e_p95_ms": 2110.541,
+          "e2e_p99_ms": 2114.85
+        },
+        "throughput": {
+          "output_tokens_per_second": 26.312,
+          "completed_requests_per_second": 0.822,
+          "slo_goodput_requests_per_second": 0.822
+        },
+        "requests": {
+          "offered": 5,
+          "completed": 5,
+          "errors": 0,
+          "slo_good": 5
+        },
+        "queue": {
+          "available": true,
+          "mean_depth": 0.027,
+          "max_depth": 1
+        },
+        "preemptions": 0,
+        "recomputed_tokens": 0
+      },
+      {
+        "arrival_rate_requests_per_second": 2.0,
+        "latency": {
+          "ttft_p50_ms": 96.936,
+          "ttft_p95_ms": 127.75,
+          "ttft_p99_ms": 129.265,
+          "itl_p50_ms": 65.001,
+          "itl_p95_ms": 67.045,
+          "itl_p99_ms": 67.978,
+          "e2e_p50_ms": 2111.463,
+          "e2e_p95_ms": 2152.455,
+          "e2e_p99_ms": 2159.823
+        },
+        "throughput": {
+          "output_tokens_per_second": 48.349,
+          "completed_requests_per_second": 1.511,
+          "slo_goodput_requests_per_second": 1.511
+        },
+        "requests": {
+          "offered": 10,
+          "completed": 10,
+          "errors": 0,
+          "slo_good": 10
+        },
+        "queue": {
+          "available": true,
+          "mean_depth": 0.052,
+          "max_depth": 1
+        },
+        "preemptions": 0,
+        "recomputed_tokens": 0
+      },
+      {
+        "arrival_rate_requests_per_second": 4.0,
+        "latency": {
+          "ttft_p50_ms": 100.716,
+          "ttft_p95_ms": 183.641,
+          "ttft_p99_ms": 190.9,
+          "itl_p50_ms": 66.689,
+          "itl_p95_ms": 69.718,
+          "itl_p99_ms": 71.01,
+          "e2e_p50_ms": 2184.883,
+          "e2e_p95_ms": 2250.417,
+          "e2e_p99_ms": 2258.981
+        },
+        "throughput": {
+          "output_tokens_per_second": 91.716,
+          "completed_requests_per_second": 2.866,
+          "slo_goodput_requests_per_second": 2.866
+        },
+        "requests": {
+          "offered": 20,
+          "completed": 20,
+          "errors": 0,
+          "slo_good": 20
+        },
+        "queue": {
+          "available": true,
+          "mean_depth": 0.08,
+          "max_depth": 1
+        },
+        "preemptions": 0,
+        "recomputed_tokens": 0
+      }
+    ]
+  }
+}

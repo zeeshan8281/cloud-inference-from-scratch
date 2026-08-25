@@ -30,12 +30,14 @@ from .profiling import nvtx_range
 from .scheduler import (
     BatchPlan,
     GenerationConfig,
+    PreemptionCandidate,
     Request,
     RequestState,
     Scheduler,
     SchedulingCandidate,
     StreamEvent,
     decode_first_priority,
+    largest_sequence_preemption,
 )
 from .weights import load_model, load_tokenizer
 
@@ -392,12 +394,16 @@ class InferenceEngine:
         runner_factory: Callable[[EngineConfig], RunnerBase] | None = None,
         device: str | None = None,
         scheduling_priority: Callable[[SchedulingCandidate], tuple[Any, ...]] = decode_first_priority,
+        preemption_priority: Callable[
+            [PreemptionCandidate], tuple[Any, ...]
+        ] = largest_sequence_preemption,
     ) -> None:
         self.config = config
         self.model_dir = Path(model_dir) if model_dir is not None else None
         self.device = device or ("cuda" if self._cuda_available() else "cpu")
         self._custom_runner_factory = runner_factory
         self.scheduling_priority = scheduling_priority
+        self.preemption_priority = preemption_priority
         self.metrics = Metrics()
         self.tokenizer: Any = None
         self.model: Qwen2CausalLM | None = None
@@ -421,7 +427,11 @@ class InferenceEngine:
             return
         await asyncio.to_thread(self._initialize)
         self.scheduler = Scheduler(
-            self.config, self.runner, self.metrics, scheduling_priority=self.scheduling_priority
+            self.config,
+            self.runner,
+            self.metrics,
+            scheduling_priority=self.scheduling_priority,
+            preemption_priority=self.preemption_priority,
         )
         await self.scheduler.start()
 
@@ -444,6 +454,7 @@ class InferenceEngine:
                 self.runner,
                 self.metrics,
                 scheduling_priority=self.scheduling_priority,
+                preemption_priority=self.preemption_priority,
             )
             self.ready = True
             return

@@ -94,6 +94,24 @@ async def consume(request) -> list[int]:
 
 
 class TestRaggedScheduler(unittest.IsolatedAsyncioTestCase):
+    async def test_custom_preemption_policy_selects_victim(self) -> None:
+        runner = FakePackedRunner(token_capacity=10)
+        scheduler = make_scheduler(runner, max_batched_tokens=8, prefill_chunk_size=4)
+        scheduler.preemption_priority = lambda candidate: (-candidate.arrival_ns,)
+        requests = [
+            await scheduler.submit(
+                f"p{i}", [i + 1] * 4, GenerationConfig(max_output_tokens=3)
+            )
+            for i in range(2)
+        ]
+        scheduler._admit_waiting()
+        runner.resident[requests[0].request_id] = 4
+        runner.resident[requests[1].request_id] = 4
+
+        self.assertTrue(scheduler._preempt_for_capacity(scheduler._build_batch_plan()))
+        self.assertEqual(requests[0].preemption_count, 1)
+        self.assertEqual(requests[1].preemption_count, 0)
+
     async def test_custom_priority_reorders_prefill_without_bypassing_budget(self) -> None:
         runner = FakePackedRunner()
         scheduler = make_scheduler(

@@ -178,9 +178,25 @@ class SchedulingCandidate:
     arrival_ns: int
 
 
+@dataclass(frozen=True)
+class PreemptionCandidate:
+    """Read-only capacity-pressure input exposed to experiments."""
+
+    request_id: str
+    allocated_tokens: int
+    tokens_fed: int
+    generated_tokens: int
+    arrival_ns: int
+
+
 def decode_first_priority(candidate: SchedulingCandidate) -> tuple[int]:
     """Production policy: decode before prefill; stable sort preserves FIFO."""
     return (candidate.phase != "decode",)
+
+
+def largest_sequence_preemption(candidate: PreemptionCandidate) -> tuple[int, int, int]:
+    """Production policy: reclaim the most resident/recomputed work first."""
+    return (candidate.allocated_tokens, candidate.tokens_fed, candidate.arrival_ns)
 
 
 class Scheduler:
@@ -194,6 +210,9 @@ class Scheduler:
         clock: Callable[[], int] = time.monotonic_ns,
         idle_sleep_seconds: float = 0.005,
         scheduling_priority: Callable[[SchedulingCandidate], tuple[Any, ...]] = decode_first_priority,
+        preemption_priority: Callable[
+            [PreemptionCandidate], tuple[Any, ...]
+        ] = largest_sequence_preemption,
     ) -> None:
         self.config = config
         self.runner = runner
@@ -201,6 +220,7 @@ class Scheduler:
         self.clock = clock
         self.idle_sleep_seconds = idle_sleep_seconds
         self.scheduling_priority = scheduling_priority
+        self.preemption_priority = preemption_priority
         self.waiting: deque[Request] = deque()
         self.active: list[Request] = []
         self._task: asyncio.Task | None = None
@@ -508,12 +528,17 @@ class Scheduler:
         candidates = [request for request in self.active if not request.is_terminal]
         if len(candidates) <= 1:
             return False
+        allocated_tokens = getattr(self.runner, "allocated_tokens", lambda _r: 0)
         victim = max(
             candidates,
-            key=lambda request: (
-                getattr(self.runner, "allocated_tokens", lambda _r: 0)(request),
-                request.tokens_fed,
-                request.arrival_ns,
+            key=lambda request: self.preemption_priority(
+                PreemptionCandidate(
+                    request_id=request.request_id,
+                    allocated_tokens=allocated_tokens(request),
+                    tokens_fed=request.tokens_fed,
+                    generated_tokens=request.generated_count,
+                    arrival_ns=request.arrival_ns,
+                )
             ),
         )
         if victim in self.active:
