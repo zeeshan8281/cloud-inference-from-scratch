@@ -182,6 +182,16 @@ deliberately deferred beyond this packed/demand-paged milestone.
 
 ## Quickstart: correctness on a cloud GPU
 
+For a recording-ready walkthrough of the deployed engine:
+
+```bash
+modal run demo.py
+```
+
+The script reads the existing API key from the Modal Secret, then demonstrates
+readiness, rejected unauthenticated access, blocking generation, live SSE text,
+ordered events, token usage, and engine metrics without printing the key.
+
 Prerequisites:
 
 - Python 3.10 or newer
@@ -526,6 +536,7 @@ The next run recreates the Volume and downloads the public model again.
 
 ```text
 modal_app.py                  Modal image, jobs, deployment, cost controls
+demo.py                       one-command deployed API walkthrough
 engine_config.json           model/dependency/scheduler/cache/cloud pins
 src/cloud_engine/model.py    custom Qwen2 forward path
 src/cloud_engine/weights.py  explicit safetensor mapping and shape validation
