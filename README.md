@@ -46,6 +46,9 @@ Verified on 2026-08-26:
   three runs with zero errors, plus two excluded warmups per run.
 - NVIDIA Nsight Systems 2026.1.3 captured and validated the engine's NVTX phase
   ranges on L4; a companion PyTorch trace contains 13,667 CUDA kernel records.
+- A 120-second, concurrency-eight L4 reliability soak completed 1,936 requests:
+  1,760 generated, 176 deliberately cancelled, zero failed, zero leaked request
+  blocks, 1,752 prefix hits, packed batches of eight, and a clean engine restart.
 
 ## What “from scratch” means here
 
@@ -214,12 +217,14 @@ For standardized endpoint load data and GPU timelines:
 ```bash
 modal run nvidia_aiperf.py
 modal run nvidia_profile.py
+modal run reliability.py --duration-seconds 120
 ```
 
 The first command writes NVIDIA AIPerf's native multi-run records. The second
 writes an Nsight `.nsys-rep`, a PyTorch CUDA trace, checksums, source identity,
-and profiler capability flags. Both refuse to publish an artifact when their
-workload or report validation fails.
+and profiler capability flags. All three refuse to publish an artifact when
+their workload or report validation fails. The reliability runner additionally
+injects deterministic cancellations and rebuilds the engine after timed load.
 
 The script reads the existing API key from the Modal Secret, then demonstrates
 readiness, rejected unauthenticated access, blocking generation, live SSE text,
@@ -294,6 +299,16 @@ The companion trace supplies the kernel timeline
 (`pytorch_cuda_kernel_records: true`). On an NVIDIA host such as DGX Spark,
 the same opt-in ranges are available with `ENGINE_NVTX=1` for native Nsight
 capture; DGX Spark execution remains unverified until run on that hardware.
+
+### Reliability soak
+
+The committed [L4 soak artifact](artifacts/reliability-soak-l4.json) records a
+120.2-second run at concurrency eight. It issued 1,936 requests: 1,760 completed
+generation, 176 were deliberately cancelled, and none failed. The run produced
+14,080 output tokens at 16.11 issued requests/second, exercised packed batches
+of eight and 1,752 prefix hits, drained to zero request-owned KV blocks, asserted
+allocator invariants, then constructed a fresh engine and completed another
+eight-token request without a leak.
 
 ### Ragged 3B online comparison
 
@@ -618,6 +633,7 @@ demo.py                       one-command deployed API walkthrough
 experiment.py                 correctness-gated scheduler experiment runner
 nvidia_aiperf.py              NVIDIA AIPerf Responses-API load runner
 nvidia_profile.py             Nsight NVTX + CUDA-kernel trace runner
+reliability.py                concurrent cancellation/restart L4 soak
 engine_config.json           model/dependency/scheduler/cache/cloud pins
 src/cloud_engine/model.py    custom Qwen2 forward path
 src/cloud_engine/weights.py  explicit safetensor mapping and shape validation

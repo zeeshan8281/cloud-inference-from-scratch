@@ -16,10 +16,10 @@ multi-release operating history; a repository cannot manufacture that evidence.
   hardware targets, and an upgrade-compatibility matrix.
 
 Current evidence satisfies correctness, the core runtime, baseline operations,
-and standardized load measurement on one pinned Qwen model and one L4. Bounded
-prefix reuse now has L4 parity/work-reduction evidence. Quantization, CUDA
-graphs, model/hardware breadth, durable telemetry,
-tenant controls, soak/chaos evidence, and upgrade coverage remain open. This is
+standardized load measurement, and a 1,936-request cancellation/restart soak on
+one pinned Qwen model and one L4. Bounded prefix reuse has L4 parity and
+work-reduction evidence. Quantization, CUDA graphs, model/hardware breadth,
+durable telemetry, tenant controls, and upgrade coverage remain open. This is
 therefore not yet a 9/10 production engine.
 
 ## General inference devtool
