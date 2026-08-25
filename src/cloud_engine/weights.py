@@ -38,6 +38,8 @@ def expected_tensors(dims: ModelDims) -> dict[str, tuple[int, ...]]:
         "model.embed_tokens.weight": (dims.vocab_size, dims.hidden_size),
         "model.norm.weight": (dims.hidden_size,),
     }
+    if not dims.tie_word_embeddings:
+        shapes["lm_head.weight"] = (dims.vocab_size, dims.hidden_size)
     for i in range(dims.num_layers):
         prefix = f"model.layers.{i}"
         shapes.update(
@@ -98,15 +100,13 @@ def load_state_dict(model_dir: str | Path, dims: ModelDims, dtype: Any = None) -
         more = "" if len(missing) <= 8 else f" (+{len(missing) - 8} more)"
         raise KeyError(f"missing required tensors: {preview}{more}")
 
-    unexpected = sorted(set(state) - set(expected) - _TIED_OPTIONAL_KEYS)
+    optional = _TIED_OPTIONAL_KEYS if dims.tie_word_embeddings else set()
+    unexpected = sorted(set(state) - set(expected) - optional)
     if unexpected:
         raise KeyError(
             "unexpected tensors incompatible with pinned architecture: "
             f"{', '.join(unexpected[:12])}"
         )
-
-    if "model.lm_head.weight" in state and not dims.tie_word_embeddings:
-        raise ValueError("lm_head present but config says embeddings are not tied")
 
     for name, shape in expected.items():
         actual = tuple(state[name].shape)

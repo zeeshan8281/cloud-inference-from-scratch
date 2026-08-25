@@ -18,8 +18,9 @@ multi-release operating history; a repository cannot manufacture that evidence.
 Current evidence satisfies correctness, the core runtime, baseline operations,
 standardized load measurement, and a 1,936-request cancellation/restart soak on
 one pinned Qwen model and one L4. Bounded prefix reuse has L4 parity and
-work-reduction evidence, and the same 20-check suite passes on A100.
-Quantization, CUDA graphs, model-family breadth,
+work-reduction evidence, the same 20-check suite passes on A100, and exact packed
+oracle parity passes on both Qwen2 and Llama-family checkpoints.
+Quantization, CUDA graphs,
 durable telemetry, tenant controls, and upgrade coverage remain open. This is
 therefore not yet a 9/10 production engine.
 
@@ -36,8 +37,10 @@ therefore not yet a 9/10 production engine.
 The demo, NVIDIA AIPerf runner, and GPU profiler are working. Experiments can
 change scheduling order, preemption victim selection, active-sequence limits,
 batch token budgets, and prefill chunk size; they emit raw and compact artifacts
-only after correctness gates pass. Model support remains narrow, so this
-category is not yet 9/10.
+only after correctness gates pass. Pinned Qwen2 and Llama-family examples both
+have machine-readable exact-oracle GPU evidence. Every gate above now passes for
+the declared greedy, text-only, single-GPU envelope, earning 9/10; the final
+point requires independent adoption and multi-release history.
 
 ## NVIDIA-native experimentation workbench
 

@@ -51,6 +51,24 @@ class TestCommittedEvidence(unittest.TestCase):
         self.assertEqual(result["failed"], 0)
         self.assertTrue(all(check["passed"] for check in result["checks"]))
 
+    def test_current_qwen_correctness_gate(self) -> None:
+        result = json.loads(
+            (ARTIFACTS / "ragged-l4-correctness.json").read_text()
+        )
+        self.assertEqual(result["gpu"], "NVIDIA L4")
+        self.assertEqual(result["passed"], 20)
+        self.assertEqual(result["failed"], 0)
+        self.assertTrue(all(check["passed"] for check in result["checks"]))
+
+    def test_llama_family_correctness_gate(self) -> None:
+        result = json.loads((ARTIFACTS / "llama-ragged-l4.json").read_text())
+        self.assertTrue(result["passed"])
+        self.assertTrue(result["model"].startswith("TinyLlama/"))
+        self.assertEqual(result["oracle_sequences"], 4)
+        self.assertEqual(result["tokens_per_sequence"], 8)
+        self.assertGreaterEqual(result["max_forward_request_count"], 4)
+        self.assertEqual(result["gpu"], "NVIDIA L4")
+
     def test_experiment_correctness_gate(self) -> None:
         result = json.loads(
             (ARTIFACTS / "experiment-short-prefill-first-summary.json").read_text()

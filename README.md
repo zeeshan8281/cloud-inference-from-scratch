@@ -10,13 +10,14 @@ Build the engine behind an LLM API without owning a GPU.
 > Triton attention.
 > Verified against serial Triton and vLLM on the same NVIDIA L4.
 
-This repository is an educational, from-scratch inference server for a pinned
-`Qwen/Qwen2.5-3B` base model. It implements a flat multi-request transformer
-forward, decode-first token-budget scheduling, chunked prefill, transactional
-demand-paged KV allocation, bounded prefix reuse, recompute preemption, mixed ragged Triton attention,
-and authenticated Responses JSON/SSE delivery. Heavy execution runs on one
-serverless NVIDIA L4 through Modal; the local package intentionally has no ML
-runtime dependencies.
+This repository is an educational, from-scratch inference server whose deployed
+profile uses pinned `Qwen/Qwen2.5-3B`. The same custom runtime also has exact
+oracle evidence for the Llama-family `TinyLlama-1.1B`. It implements a flat
+multi-request transformer forward, decode-first token-budget scheduling,
+chunked prefill, transactional demand-paged KV allocation, bounded prefix reuse,
+recompute preemption, mixed ragged Triton attention, and authenticated Responses
+JSON/SSE delivery. Heavy execution runs on one serverless NVIDIA L4 through
+Modal; the local package intentionally has no ML runtime dependencies.
 
 > This is tested systems code, not a production service or a replacement for
 > vLLM. The five-stage 0.5B baseline and its failed optimization gates remain
@@ -27,10 +28,10 @@ runtime dependencies.
 
 Verified on 2026-08-26:
 
-- 58/58 dependency-light local tests passed; CI repeats them on Python 3.10,
+- 60/60 dependency-light local tests passed; CI repeats them on Python 3.10,
   3.12, and 3.13 with commit-pinned actions.
 - 53/53 tests plus real FastAPI route/auth integration passed in Modal's CPU image
-  before the four artifact-only integrity checks were added.
+  before the committed-artifact integrity checks were added.
 - 34/34 legacy L4 regression checks passed in 208.3 seconds.
 - 20/20 Qwen2.5-3B Ragged L4 checks passed in 66.5 seconds: exact HF tokens,
   four request IDs in one transformer invocation, 4,000-token chunked prefill,
@@ -39,6 +40,8 @@ Verified on 2026-08-26:
 - The identical 20-check suite passed on an NVIDIA A100-SXM4-40GB in 70.1
   seconds; the machine-readable artifact records compute capability 8.0, the
   pinned model revision, source identity, and every check result.
+- The untied-head Llama path generated four packed TinyLlama-1.1B sequences on
+  L4 with all 32 token IDs exactly equal to the Hugging Face oracle.
 - Ragged Triton matched the Torch oracle at batches 1/2/4/8/16 and contexts
   through 4,002 tokens; worst observed absolute difference was 0.00195. The
   serial Triton kernel also matched at head dimension 128 and context 4,096.
@@ -63,7 +66,7 @@ The engine uses PyTorch tensor primitives and the official tokenizer and
 safetensor weights. It does **not** call vLLM, SGLang, Hugging Face `generate()`,
 or Hugging Face `past_key_values` in its serving path. The custom implementation
 contains embedding lookup, RMSNorm, RoPE, grouped-query attention, SwiGLU,
-residual connections, the tied output projection, cache writes, scheduling,
+residual connections, tied or untied output projection, cache writes, scheduling,
 streaming, and the Triton kernel. Hugging Face model execution exists only as a
 correctness oracle in smoke and remote GPU tests.
 
@@ -226,12 +229,14 @@ modal run nvidia_aiperf.py
 modal run nvidia_profile.py
 modal run reliability.py --duration-seconds 120
 modal run -w artifacts/ragged-a100-correctness.json modal_app.py::remote_ragged_a100_tests
+modal run -w artifacts/llama-ragged-l4.json modal_app.py::llama_ragged_smoke
 ```
 
 The first command writes NVIDIA AIPerf's native multi-run records. The second
 writes an Nsight `.nsys-rep`, a PyTorch CUDA trace, checksums, source identity,
 and profiler capability flags. The last command repeats the full correctness
-and pressure suite on A100 and captures its machine-readable result. All four
+and pressure suite on A100 and captures its machine-readable result. The final
+command proves a second model family against the HF oracle. These commands
 refuse to publish an artifact when
 their workload or report validation fails. The reliability runner additionally
 injects deterministic cancellations and rebuilds the engine after timed load.
@@ -464,6 +469,7 @@ modal run modal_app.py::api_lifecycle_tests
 modal run modal_app.py::remote_gpu_tests
 modal run modal_app.py::remote_ragged_gpu_tests
 modal run -w artifacts/ragged-a100-correctness.json modal_app.py::remote_ragged_a100_tests
+modal run -w artifacts/llama-ragged-l4.json modal_app.py::llama_ragged_smoke
 
 # Billable three-way warm HTTP comparison; writes raw JSON locally.
 modal run modal_app.py::online_compare --rates 0.5,1,2,4 --duration-seconds 10
@@ -654,7 +660,7 @@ nvidia_aiperf.py              NVIDIA AIPerf Responses-API load runner
 nvidia_profile.py             Nsight NVTX + CUDA-kernel trace runner
 reliability.py                concurrent cancellation/restart L4 soak
 engine_config.json           model/dependency/scheduler/cache/cloud pins
-src/cloud_engine/model.py    custom Qwen2 forward path
+src/cloud_engine/model.py    custom Qwen2/Llama forward path
 src/cloud_engine/weights.py  explicit safetensor mapping and shape validation
 src/cloud_engine/cache.py    contiguous cache, paged pool, block allocator
 src/cloud_engine/attention.py torch backends and Triton dispatch
@@ -671,9 +677,10 @@ docs/                        architecture and one chapter per stage
 
 ## Current-release limitations
 
-The deployed release supports one pinned 3B base-model revision, FP16, a single
-L4, greedy text-only generation, a 4,096-token project context limit, and a
-narrow Responses-style API. It has no sampling, instruction/chat template,
+The deployed release supports one pinned 3B Qwen revision; the separate Llama
+path is correctness-verified but not exposed by that endpoint. Both paths are
+FP16-only. Serving uses a single L4, greedy text-only generation, a 4,096-token
+project context limit, and a narrow Responses-style API. It has no sampling, instruction/chat template,
 quantization, cache swapping/offload, CUDA graphs, fused non-
 attention kernels, speculative decoding, tensor parallelism, multi-GPU support,
 persistent metrics, tenant isolation, or user system.

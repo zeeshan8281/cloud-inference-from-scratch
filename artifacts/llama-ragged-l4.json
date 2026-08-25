@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "model": "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T",
+  "model_revision": "59f6f375b26bde864a6ca194a9a3044570490064",
+  "source_revision": "65c504843e30f7cc86f58665df5d30717e42feb7+tree-89497398410b",
+  "oracle_sequences": 4,
+  "tokens_per_sequence": 8,
+  "max_forward_request_count": 4,
+  "gpu": "NVIDIA L4",
+  "compute_capability": [
+    8,
+    9
+  ]
+}

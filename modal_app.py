@@ -24,6 +24,7 @@ PINNED = json.loads(Path(__file__).parent.joinpath("engine_config.json").read_te
 IMAGE_PINS = PINNED["image"]
 MODEL = PINNED["model"]
 RAGGED_MODEL = PINNED["ragged_model"]
+LLAMA_MODEL = PINNED["llama_model"]
 MODAL_CFG = PINNED["modal"]
 
 APP_NAME = MODAL_CFG["app_name"]
@@ -273,19 +274,24 @@ def smoke() -> dict:
 @app.function(**_gpu_options())
 def ragged_smoke() -> dict:
     """Fast packed-runtime proof on the cached 0.5B oracle model."""
+    return _execute_ragged_smoke(MODEL, "ragged smoke: real multi-request forward")
+
+
+def _execute_ragged_smoke(model_spec: dict, label: str) -> dict:
     import asyncio
 
     from cloud_engine.config import build_config
     from cloud_engine.engine import InferenceEngine
     from cloud_engine.scheduler import GenerationConfig
 
-    _print_run_header("ragged smoke: real multi-request forward")
-    model_dir = _prepare_weights(MODEL)
+    _print_run_header(label)
+    model_dir = _prepare_weights(model_spec)
     config = build_config(
         "ragged",
-        model_id=MODEL["id"],
-        model_revision=MODEL["revision"],
-        max_model_len=MODEL["max_model_len"],
+        model_id=model_spec["id"],
+        model_revision=model_spec["revision"],
+        max_model_len=model_spec["max_model_len"],
+        eos_token_id=model_spec["eos_token_id"],
     )
     engine = InferenceEngine(config, model_dir=model_dir)
     prompts = (
@@ -321,7 +327,10 @@ def ragged_smoke() -> dict:
 
     tokenizer = load_tokenizer(model_dir)
     reference = [
-        _reference_generate(model_dir, tokenizer.encode(prompt), 8) for prompt in prompts
+        _reference_generate(
+            model_dir, tokenizer.encode(prompt), 8, model_spec["eos_token_id"]
+        )
+        for prompt in prompts
     ]
     got = [result.token_ids for result in results]
     if got != reference:
@@ -330,10 +339,34 @@ def ragged_smoke() -> dict:
     print(f"last packed IDs: {snapshot['scheduler']['last_forward_request_ids']}")
     print("token parity vs Hugging Face: exact")
     print("RAGGED SMOKE PASSED")
-    return {"passed": True, "max_forward_request_count": max_requests}
+    return {
+        "passed": True,
+        "model": model_spec["id"],
+        "model_revision": model_spec["revision"],
+        "source_revision": os.environ.get("SOURCE_COMMIT", SOURCE_COMMIT),
+        "oracle_sequences": len(reference),
+        "tokens_per_sequence": 8,
+        "max_forward_request_count": max_requests,
+    }
 
 
-def _reference_generate(model_dir: str, prompt_ids: list[int], max_new_tokens: int) -> list[int]:
+@app.function(**_gpu_options())
+def llama_ragged_smoke() -> str:
+    """Exact packed-runtime parity for the pinned Llama-family model."""
+    result = _execute_ragged_smoke(LLAMA_MODEL, "Llama-family ragged parity smoke")
+    import torch
+
+    result["gpu"] = torch.cuda.get_device_name(0)
+    result["compute_capability"] = list(torch.cuda.get_device_capability())
+    return json.dumps(result, indent=2) + "\n"
+
+
+def _reference_generate(
+    model_dir: str,
+    prompt_ids: list[int],
+    max_new_tokens: int,
+    pad_token_id: int = MODEL["eos_token_id"],
+) -> list[int]:
     """Hugging Face oracle used ONLY as a test reference (PRD G1/M1)."""
     import torch
     from transformers import AutoModelForCausalLM
@@ -353,7 +386,7 @@ def _reference_generate(model_dir: str, prompt_ids: list[int], max_new_tokens: i
             temperature=None,
             top_p=None,
             top_k=None,
-            pad_token_id=MODEL["eos_token_id"],
+            pad_token_id=pad_token_id,
         )
     return out[0][input_ids.shape[1] :].tolist()
 

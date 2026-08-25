@@ -1,8 +1,8 @@
-"""Custom Qwen2 inference forward path (PRD FR2).
+"""Custom Qwen2/Llama inference forward path (PRD FR2).
 
-Implements only what Qwen2.5-0.5B needs at inference time: token embedding,
+Implements the shared Qwen2/Llama decoder used by the pinned models: token embedding,
 RMSNorm, rotary embeddings, grouped-query causal attention, SwiGLU MLP,
-residuals, final norm and the tied LM head. No Hugging Face modules, no
+residuals, final norm and tied or untied LM heads. No Hugging Face modules, no
 ``generate()``, no HF cache classes anywhere on this path.
 """
 
@@ -54,13 +54,15 @@ class ModelDims:
             "intermediate_size",
             "vocab_size",
             "rms_norm_eps",
-            "rope_theta",
             "tie_word_embeddings",
             "eos_token_id",
         }
         missing = required - set(config)
-        if missing or config.get("model_type") != "qwen2":
+        model_type = config.get("model_type")
+        if missing or model_type not in {"qwen2", "llama"}:
             raise ValueError(f"unsupported/missing model config fields: {sorted(missing)}")
+        if config.get("hidden_act", "silu") != "silu" or config.get("rope_scaling"):
+            raise ValueError("only SwiGLU and unscaled RoPE model variants are supported")
         hidden_size = config["hidden_size"]
         num_heads = config["num_attention_heads"]
         if hidden_size % num_heads != 0:
@@ -74,8 +76,8 @@ class ModelDims:
             intermediate_size=config["intermediate_size"],
             vocab_size=config["vocab_size"],
             rms_norm_eps=config["rms_norm_eps"],
-            rope_theta=config["rope_theta"],
-            attention_bias=config.get("attention_bias", True),
+            rope_theta=config.get("rope_theta", 10_000.0),
+            attention_bias=config.get("attention_bias", model_type == "qwen2"),
             tie_word_embeddings=config["tie_word_embeddings"],
             eos_token_id=config["eos_token_id"],
         )
@@ -175,8 +177,11 @@ class Qwen2CausalLM(nn.Module):
             Qwen2DecoderLayer(dims, dtype, device) for _ in range(dims.num_layers)
         )
         self.norm = Qwen2RMSNorm(dims, dtype, device)
-        if not dims.tie_word_embeddings:
-            raise ValueError("v1 requires tied word embeddings (Qwen2.5-0.5B)")
+        self.lm_head = (
+            None
+            if dims.tie_word_embeddings
+            else nn.Linear(dims.hidden_size, dims.vocab_size, bias=False, dtype=dtype, device=device)
+        )
         self._rope_cos: Any = None
         self._rope_sin: Any = None
 
@@ -218,9 +223,8 @@ class Qwen2CausalLM(nn.Module):
             selected = hidden.index_select(0, logit_indices)
         else:
             selected = hidden if return_all_logits else hidden[-1:]
-        logits = _torch.mm(
-            selected.to(_torch.float32), self.embed_tokens.weight.to(_torch.float32).t()
-        )
+        output_weight = self.embed_tokens.weight if self.lm_head is None else self.lm_head.weight
+        logits = _torch.mm(selected.to(_torch.float32), output_weight.to(_torch.float32).t())
         return logits
 
 
