@@ -11,6 +11,20 @@ ARTIFACTS = ROOT / "artifacts"
 
 
 class TestCommittedEvidence(unittest.TestCase):
+    def test_api_lifecycle_gate(self) -> None:
+        result = json.loads((ARTIFACTS / "api-lifecycle.json").read_text())
+        self.assertTrue(result["passed"])
+        self.assertGreaterEqual(result["unit_tests"], 66)
+        self.assertEqual(
+            set(result["fastapi_checks"]),
+            {
+                "legacy_auth",
+                "admin_metrics",
+                "tenant_metrics_denied",
+                "malformed_content_length",
+            },
+        )
+
     def test_aiperf_native_artifact(self) -> None:
         with zipfile.ZipFile(ARTIFACTS / "aiperf-responses.zip") as archive:
             metadata = json.loads(archive.read("cloud-inference-run.json"))

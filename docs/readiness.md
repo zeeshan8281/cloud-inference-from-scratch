@@ -21,8 +21,11 @@ one pinned Qwen model and one L4. Bounded prefix reuse has L4 parity and
 work-reduction evidence, the same 20-check suite passes on A100, and exact packed
 oracle parity passes on both Qwen2 and Llama-family checkpoints.
 CUDA graph decode has exact-token and 3.24x paired L4 evidence. Quantization,
-durable telemetry, tenant controls, and upgrade coverage remain open. This is
-therefore not yet a 9/10 production engine.
+and upgrade coverage remain open. Secret-backed tenant policies now enforce
+per-tenant concurrency, rolling token budgets, and admin-only metrics; prompt-free
+structured audit logs survive container teardown under Modal's plan retention
+and can be exported through its OpenTelemetry integration. This is therefore not
+yet a 9/10 production engine.
 
 ## General inference devtool
 

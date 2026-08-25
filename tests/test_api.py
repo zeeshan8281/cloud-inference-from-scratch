@@ -8,8 +8,12 @@ import unittest
 
 from cloud_engine.api import (
     ApiError,
+    TenantGate,
+    TenantPolicy,
+    authenticate,
     authorized,
     build_response_object,
+    parse_tenant_policies,
     response_event_sequence,
     validate_payload,
 )
@@ -125,6 +129,54 @@ class TestAuth(unittest.TestCase):
         self.assertFalse(authorized(None, key))
         self.assertFalse(authorized("Bearer", key))
         self.assertFalse(authorized("", key))
+
+    def test_multi_tenant_auth_returns_identity(self) -> None:
+        policies = {
+            "alpha": TenantPolicy("a" * 32, 2, 1000),
+            "beta": TenantPolicy("b" * 32, 2, 1000),
+        }
+        self.assertEqual(authenticate(f"Bearer {'b' * 32}", policies), "beta")
+        self.assertIsNone(authenticate(f"Bearer {'c' * 32}", policies))
+
+    def test_tenant_secret_parser_fails_closed(self) -> None:
+        parsed = parse_tenant_policies(
+            '{"alpha":{"api_key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+            '"max_concurrent":2,"tokens_per_minute":4096,"metrics":true}}'
+        )
+        self.assertTrue(parsed["alpha"].metrics)
+        with self.assertRaisesRegex(ValueError, "at least 32"):
+            parse_tenant_policies(
+                '{"alpha":{"api_key":"short","max_concurrent":2,'
+                '"tokens_per_minute":4096}}'
+            )
+
+
+class TestTenantGate(unittest.IsolatedAsyncioTestCase):
+    async def test_concurrency_and_rolling_token_limits(self) -> None:
+        now = [100.0]
+        gate = TenantGate(
+            {"alpha": TenantPolicy("a" * 32, 1, 256)}, clock=lambda: now[0]
+        )
+        first = await gate.acquire("alpha", 200)
+        with self.assertRaisesRegex(ApiError, "concurrency"):
+            await gate.acquire("alpha", 1)
+        await first.release()
+        with self.assertRaisesRegex(ApiError, "rolling token"):
+            await gate.acquire("alpha", 100)
+        now[0] += 61
+        second = await gate.acquire("alpha", 100)
+        await second.release()
+
+    async def test_rejected_submission_can_roll_back_reservation(self) -> None:
+        gate = TenantGate({"alpha": TenantPolicy("a" * 32, 1, 256)})
+        lease = await gate.acquire("alpha", 256)
+        await lease.release(rollback_tokens=True)
+        replacement = await gate.acquire("alpha", 256)
+        snapshot = await gate.snapshot()
+        self.assertEqual(snapshot["alpha"]["active"], 1)
+        self.assertEqual(snapshot["alpha"]["reserved_tokens_60s"], 256)
+        self.assertNotIn("api_key", snapshot["alpha"])
+        await replacement.release()
 
 
 class TestResponseObjectShape(unittest.TestCase):

@@ -85,6 +85,11 @@ image = (
         "/root/tests",
         copy=True,
     )
+    .add_local_dir(
+        Path(__file__).parent / "artifacts",
+        "/root/artifacts",
+        copy=True,
+    )
     .add_local_file(
         Path(__file__).parent / "engine_config.json",
         "/root/engine_config.json",
@@ -889,6 +894,7 @@ def remote_ragged_a100_tests() -> str:
 )
 def api_lifecycle_tests() -> str:
     """API schema/lifecycle integration tests in a CPU container (PRD §13.2)."""
+    import re
     import subprocess
     import sys
 
@@ -907,7 +913,7 @@ def api_lifecycle_tests() -> str:
 
     from fastapi.testclient import TestClient
 
-    from cloud_engine.api import create_app
+    from cloud_engine.api import TenantPolicy, create_app
 
     engine = SimpleNamespace(
         ready=True,
@@ -919,8 +925,43 @@ def api_lifecycle_tests() -> str:
         assert client.get("/metrics").status_code == 401
         assert client.get("/metrics", headers={"Authorization": "Bearer test-key"}).status_code == 200
         assert client.post("/v1/responses", json={}).status_code == 401
+    policies = {
+        "admin": TenantPolicy("a" * 32, 2, 4096, True),
+        "user": TenantPolicy("u" * 32, 1, 256, False),
+    }
+    with TestClient(
+        create_app(engine, api_key=None, model_id=MODEL["id"], tenant_policies=policies)
+    ) as client:
+        assert client.get(
+            "/metrics", headers={"Authorization": f"Bearer {'a' * 32}"}
+        ).status_code == 200
+        assert client.get(
+            "/metrics", headers={"Authorization": f"Bearer {'u' * 32}"}
+        ).status_code == 403
+        assert client.post(
+            "/v1/responses",
+            headers={
+                "Authorization": f"Bearer {'u' * 32}",
+                "Content-Length": "invalid",
+            },
+        ).status_code == 400
     print("FastAPI route/auth integration checks passed")
-    return "cpu-tests-passed"
+    count = re.search(r"Ran (\d+) tests", completed.stdout + completed.stderr)
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "source_revision": os.environ.get("SOURCE_COMMIT", SOURCE_COMMIT),
+            "passed": True,
+            "unit_tests": int(count.group(1)) if count else None,
+            "fastapi_checks": [
+                "legacy_auth",
+                "admin_metrics",
+                "tenant_metrics_denied",
+                "malformed_content_length",
+            ],
+        },
+        indent=2,
+    ) + "\n"
 
 
 @app.cls(
@@ -943,17 +984,25 @@ class ApiServer:
     @modal.enter()
     async def load(self) -> None:
         self.api_key = os.environ.get("ENGINE_API_KEY")
-        if not self.api_key:
+        tenant_json = os.environ.get("ENGINE_TENANTS_JSON")
+        if not self.api_key and not tenant_json:
             raise RuntimeError(
-                f"missing ENGINE_API_KEY secret {SECRET_NAME!r}; refusing to start (fail closed)"
+                f"missing ENGINE_API_KEY or ENGINE_TENANTS_JSON in secret "
+                f"{SECRET_NAME!r}; refusing to start (fail closed)"
             )
         model_dir = _prepare_weights(RAGGED_MODEL)
         config, self.engine = _build_engine(self.deployed_mode, model_dir)
         await self.engine.start()
 
-        from cloud_engine.api import create_app
+        from cloud_engine.api import create_app, parse_tenant_policies
 
-        self.app = create_app(self.engine, api_key=self.api_key, model_id=config.model_id)
+        policies = parse_tenant_policies(tenant_json) if tenant_json else None
+        self.app = create_app(
+            self.engine,
+            api_key=self.api_key,
+            model_id=config.model_id,
+            tenant_policies=policies,
+        )
 
     @modal.exit()
     async def unload(self) -> None:

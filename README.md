@@ -28,10 +28,11 @@ Modal; the local package intentionally has no ML runtime dependencies.
 
 Verified on 2026-08-26:
 
-- 62/62 dependency-light local tests passed; CI repeats them on Python 3.10,
+- 67/67 dependency-light local tests passed; CI repeats them on Python 3.10,
   3.12, and 3.13 with commit-pinned actions.
-- 53/53 tests plus real FastAPI route/auth integration passed in Modal's CPU image
-  before the committed-artifact integrity checks were added.
+- 67/67 tests plus real FastAPI legacy/multi-tenant auth and authorization
+  integration passed in Modal's CPU image; the source-identified result is
+  committed and checked by the local suite.
 - 34/34 legacy L4 regression checks passed in 208.3 seconds.
 - 20/20 Qwen2.5-3B Ragged L4 checks passed in 66.5 seconds: exact HF tokens,
   four request IDs in one transformer invocation, 4,000-token chunked prefill,
@@ -476,8 +477,8 @@ uv sync --extra dev
 uv run python -m unittest discover -s tests -p 'test_*.py' -v
 uv run ruff check .
 
-# Same suite plus real FastAPI construction/auth in the Modal CPU image.
-modal run modal_app.py::api_lifecycle_tests
+# Same suite plus real FastAPI auth/tenant construction in the Modal CPU image.
+modal run -w artifacts/api-lifecycle.json modal_app.py::api_lifecycle_tests
 
 # Billable L4: model/oracle/cache/kernel/concurrency/failure/stream checks.
 modal run modal_app.py::remote_gpu_tests
@@ -528,6 +529,34 @@ Modal documents its [Secret CLI](https://modal.com/docs/cli/latest/secret),
 [deployed Web Functions](https://modal.com/docs/guide/webhooks), and
 [deployment lifecycle](https://modal.com/docs/guide/managing-deployments).
 
+For isolated tenant keys and quotas, replace the legacy `ENGINE_API_KEY` secret
+with `ENGINE_TENANTS_JSON`. Every key must contain at least 32 characters:
+
+```bash
+ADMIN_KEY="$(openssl rand -hex 32)"
+USER_KEY="$(openssl rand -hex 32)"
+ENGINE_TENANTS_JSON="$(jq -cn \
+  --arg admin "$ADMIN_KEY" --arg user "$USER_KEY" \
+  '{admin:{api_key:$admin,max_concurrent:4,tokens_per_minute:32768,metrics:true},user:{api_key:$user,max_concurrent:2,tokens_per_minute:8192,metrics:false}}')"
+modal secret create cloud-inference-api ENGINE_TENANTS_JSON="$ENGINE_TENANTS_JSON" --force
+modal deploy modal_app.py
+```
+
+The API reserves prompt tokens plus requested maximum output tokens against a
+rolling one-minute tenant budget before admission. Concurrent leases remain held
+through blocking completion or the full SSE lifecycle. Only policies with
+`metrics:true` can read `/metrics`; those snapshots include redacted per-tenant
+usage and never keys.
+
+Every terminal request emits a prompt-free `inference_audit` JSON log with tenant,
+request ID, status, and token counts. Modal stores function/container logs with
+[plan-dependent retention](https://modal.com/docs/guide/security) and can export
+them to an external provider through its
+[OpenTelemetry integration](https://modal.com/docs/guide/otel-integration).
+Quotas are process-local and deployment-global because this project deliberately
+caps Modal at one container; move them to a transactional shared store before
+raising `max_containers`.
+
 ### Blocking response
 
 ```bash
@@ -576,8 +605,8 @@ response text. The completed event contains input, output, and total token usage
 | Endpoint | Auth | Behavior |
 |---|---|---|
 | `GET /healthz` | Public | readiness, pinned model, fixed mode |
-| `GET /metrics` | Bearer | bounded counters, latency, scheduler, KV, GPU gauges |
-| `POST /v1/responses` | Bearer | blocking JSON or SSE generation |
+| `GET /metrics` | Admin bearer | bounded counters, tenant usage, latency, scheduler, KV, GPU gauges |
+| `POST /v1/responses` | Tenant bearer | quota-controlled blocking JSON or SSE generation |
 
 Accepted request fields are `model`, `input`, optional `instructions`,
 `max_output_tokens` (1–256), `temperature` (must be `0`), `stream` (boolean),
@@ -681,7 +710,7 @@ src/cloud_engine/attention.py torch backends and Triton dispatch
 src/cloud_engine/kernel.py   serial decode and mixed ragged Triton attention
 src/cloud_engine/scheduler.py lifecycle, BatchPlan, priority, preemption
 src/cloud_engine/engine.py   runners, PackedBatch, engine facade and handles
-src/cloud_engine/api.py      validation, auth, Responses JSON, SSE
+src/cloud_engine/api.py      validation, tenant quotas/auth, Responses JSON/SSE
 src/cloud_engine/metrics.py  bounded measurements
 benchmarks/                  deterministic offline and online HTTP workloads
 artifacts/                   raw benchmarks, AIPerf records, GPU traces
@@ -697,7 +726,7 @@ FP16-only. Serving uses a single L4, greedy text-only generation, a 4,096-token
 project context limit, and a narrow Responses-style API. It has no sampling, instruction/chat template,
 quantization, cache swapping/offload, fused non-
 attention kernels, speculative decoding, tensor parallelism, multi-GPU support,
-persistent metrics, tenant isolation, or user system.
+persistent application metrics or a user-management system.
 
 It is a real packed inference engine with bounded scope, not a production stack.
 The vLLM comparison quantifies the remaining kernel/runtime optimization gap.
@@ -707,7 +736,8 @@ The vLLM comparison quantifies the remaining kernel/runtime optimization gap.
 - **Cold request is slow:** a scale-to-zero call must start the L4 container and
   load weights. Retry only after allowing a few minutes for the first request.
 - **401:** verify the exact `ENGINE_API_KEY` in the named Modal Secret and bearer
-  header; redeploy after rotating a secret if an existing container stays warm.
+  header; for multi-tenant mode verify `ENGINE_TENANTS_JSON`; redeploy after
+  rotating a secret if an existing container stays warm.
 - **422 asking for a `request` query parameter:** update to the release containing
   the FastAPI request-injection fix and redeploy.
 - **`capacity_exhausted`:** reduce concurrency or context size. Ragged demand
