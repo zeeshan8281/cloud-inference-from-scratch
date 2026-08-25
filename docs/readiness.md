@@ -20,8 +20,10 @@ standardized load measurement, and a 1,936-request cancellation/restart soak on
 one pinned Qwen model and one L4. Bounded prefix reuse has L4 parity and
 work-reduction evidence, the same 20-check suite passes on A100, and exact packed
 oracle parity passes on both Qwen2 and Llama-family checkpoints.
-CUDA graph decode has exact-token and 3.24x paired L4 evidence. Quantization,
-and upgrade coverage remain open. Secret-backed tenant policies now enforce
+CUDA graph decode has exact-token and 3.24x paired L4 evidence. A candidate
+PyTorch 2.13/CUDA 13, Triton 3.7, and Transformers 5.15 stack passed packed
+exact-oracle and CUDA-graph execution on L4; the release stack remains pinned
+until promotion. Quantization remains open. Secret-backed tenant policies enforce
 per-tenant concurrency, rolling token budgets, and admin-only metrics; prompt-free
 structured audit logs survive container teardown under Modal's plan retention
 and can be exported through its OpenTelemetry integration. This is therefore not

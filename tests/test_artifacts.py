@@ -90,6 +90,20 @@ class TestCommittedEvidence(unittest.TestCase):
         self.assertGreaterEqual(result["cuda_graph_replays"], 90)
         self.assertGreaterEqual(result["speedup"], 1.2)
 
+    def test_candidate_stack_compatibility_gate(self) -> None:
+        result = json.loads(
+            (ARTIFACTS / "compatibility-candidate-l4.json").read_text()
+        )
+        self.assertTrue(result["passed"])
+        self.assertNotIn("unknown", result["source_revision"])
+        self.assertEqual(result["candidate_stack"]["torch"], "2.13.0")
+        self.assertEqual(result["candidate_stack"]["triton"], "3.7.1")
+        self.assertEqual(result["candidate_stack"]["transformers"], "5.15.1")
+        self.assertEqual(result["oracle_sequences"], 4)
+        self.assertEqual(result["tokens_per_sequence"], 8)
+        self.assertGreaterEqual(result["max_forward_request_count"], 4)
+        self.assertGreaterEqual(result["cuda_graph_replays"], 1)
+
     def test_experiment_correctness_gate(self) -> None:
         result = json.loads(
             (ARTIFACTS / "experiment-short-prefill-first-summary.json").read_text()

@@ -22,6 +22,7 @@ import modal
 
 PINNED = json.loads(Path(__file__).parent.joinpath("engine_config.json").read_text())
 IMAGE_PINS = PINNED["image"]
+COMPATIBILITY_CANDIDATE = PINNED["compatibility_candidate"]
 MODEL = PINNED["model"]
 RAGGED_MODEL = PINNED["ragged_model"]
 LLAMA_MODEL = PINNED["llama_model"]
@@ -103,6 +104,10 @@ image = (
             "TOKENIZERS_PARALLELISM": "false",
         }
     )
+)
+
+compatibility_image = image.pip_install(
+    *(f"{package.replace('_', '-')}=={version}" for package, version in COMPATIBILITY_CANDIDATE.items())
 )
 
 vllm_image = (
@@ -375,6 +380,20 @@ def llama_ragged_smoke() -> str:
     return json.dumps(result, indent=2) + "\n"
 
 
+@app.function(**_gpu_options(image=compatibility_image, timeout=3600))
+def compatibility_smoke() -> str:
+    """Run packed exact-oracle/CUDA-graph proof on the candidate dependency stack."""
+    from importlib.metadata import version
+
+    result = _execute_ragged_smoke(MODEL, "candidate-stack GPU compatibility smoke")
+    result["baseline_stack"] = IMAGE_PINS
+    result["candidate_stack"] = {
+        package: version(package.replace("_", "-"))
+        for package in COMPATIBILITY_CANDIDATE
+    }
+    return json.dumps(result, indent=2) + "\n"
+
+
 @app.function(**_gpu_options(timeout=1800))
 def cuda_graph_benchmark() -> str:
     """Paired L4 decode benchmark with exact-token and replay gates."""
@@ -479,10 +498,16 @@ def _reference_generate(
 ) -> list[int]:
     """Hugging Face oracle used ONLY as a test reference (PRD G1/M1)."""
     import torch
+    import transformers
     from transformers import AutoModelForCausalLM
 
+    dtype_arg = (
+        {"dtype": torch.float16}
+        if int(transformers.__version__.split(".")[0]) >= 5
+        else {"torch_dtype": torch.float16}
+    )
     model = AutoModelForCausalLM.from_pretrained(
-        model_dir, torch_dtype=torch.float16, attn_implementation="eager"
+        model_dir, attn_implementation="eager", **dtype_arg
     ).to("cuda")
     model.eval()
     input_ids = torch.tensor([prompt_ids], device="cuda")

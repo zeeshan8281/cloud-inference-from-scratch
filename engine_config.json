@@ -63,5 +63,18 @@
     "pydantic": "2.11.5",
     "httpx": "0.28.1",
     "uvicorn": "0.34.2"
+  },
+  "compatibility_candidate": {
+    "torch": "2.13.0",
+    "triton": "3.7.1",
+    "transformers": "5.15.1",
+    "tokenizers": "0.22.2",
+    "safetensors": "0.8.0",
+    "huggingface_hub": "1.28.0",
+    "fastapi": "0.141.1",
+    "starlette": "1.6.0",
+    "pydantic": "2.13.4",
+    "httpx": "0.28.1",
+    "uvicorn": "0.52.4"
   }
 }

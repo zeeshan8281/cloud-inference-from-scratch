@@ -54,12 +54,18 @@ def reference_logits_and_tokens(prompt_ids: list[int], max_new: int):
     global _REFERENCE_MODEL
 
     import torch
+    import transformers
     from transformers import AutoModelForCausalLM
 
     if _REFERENCE_MODEL is None:
+        dtype_arg = (
+            {"dtype": torch.float16}
+            if int(transformers.__version__.split(".")[0]) >= 5
+            else {"torch_dtype": torch.float16}
+        )
         _REFERENCE_MODEL = (
             AutoModelForCausalLM.from_pretrained(
-                MODEL_DIR, torch_dtype=torch.float16, attn_implementation="eager"
+                MODEL_DIR, attn_implementation="eager", **dtype_arg
             )
             .to("cuda")
             .eval()

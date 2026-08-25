@@ -1,0 +1,38 @@
+{
+  "passed": true,
+  "model": "Qwen/Qwen2.5-0.5B",
+  "model_revision": "060db6499f32faf8b98477b0a26969ef7d8b9987",
+  "source_revision": "e3b86aded7d11e04987968012d1f25863e0995a2+tree-2f5a09808c58",
+  "oracle_sequences": 4,
+  "tokens_per_sequence": 8,
+  "max_forward_request_count": 4,
+  "cuda_graph_captures": 1,
+  "cuda_graph_replays": 6,
+  "baseline_stack": {
+    "python_version": "3.12",
+    "torch": "2.7.1",
+    "triton": "3.3.1",
+    "transformers": "4.51.3",
+    "tokenizers": "0.21.1",
+    "safetensors": "0.5.3",
+    "huggingface_hub": "0.30.2",
+    "fastapi": "0.115.12",
+    "starlette": "0.46.2",
+    "pydantic": "2.11.5",
+    "httpx": "0.28.1",
+    "uvicorn": "0.34.2"
+  },
+  "candidate_stack": {
+    "torch": "2.13.0",
+    "triton": "3.7.1",
+    "transformers": "5.15.1",
+    "tokenizers": "0.22.2",
+    "safetensors": "0.8.0",
+    "huggingface_hub": "1.28.0",
+    "fastapi": "0.141.1",
+    "starlette": "1.6.0",
+    "pydantic": "2.13.4",
+    "httpx": "0.28.1",
+    "uvicorn": "0.52.4"
+  }
+}

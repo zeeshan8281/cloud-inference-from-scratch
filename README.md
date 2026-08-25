@@ -28,9 +28,9 @@ Modal; the local package intentionally has no ML runtime dependencies.
 
 Verified on 2026-08-26:
 
-- 67/67 dependency-light local tests passed; CI repeats them on Python 3.10,
+- 68/68 dependency-light local tests passed; CI repeats them on Python 3.10,
   3.12, and 3.13 with commit-pinned actions.
-- 67/67 tests plus real FastAPI legacy/multi-tenant auth and authorization
+- 68/68 tests plus real FastAPI legacy/multi-tenant auth and authorization
   integration passed in Modal's CPU image; the source-identified result is
   committed and checked by the local suite.
 - 34/34 legacy L4 regression checks passed in 208.3 seconds.
@@ -46,6 +46,9 @@ Verified on 2026-08-26:
 - Fixed-shape decode CUDA graphs preserved exact tokens across three paired L4
   trials and reduced median four-request batch latency from 1,393 ms to 431 ms
   on Qwen2.5-0.5B (3.24x), with one capture and 99 measured replays.
+- A candidate major dependency stack (PyTorch 2.13/CUDA 13, Triton 3.7, and
+  Transformers 5.15) passed the same packed exact-oracle and CUDA-graph smoke
+  on L4; the serving image remains on the release pins until promotion.
 - Ragged Triton matched the Torch oracle at batches 1/2/4/8/16 and contexts
   through 4,002 tokens; worst observed absolute difference was 0.00195. The
   serial Triton kernel also matched at head dimension 128 and context 4,096.
@@ -201,7 +204,7 @@ Gates 1–6 passed in the 20-check L4 suite. Gate 7 passed in the authenticated
 the same workload hash, source identity, 3B revision, L4, active-sequence cap,
 token budget, greedy decoding, and EOS behavior across all implementations.
 
-KV offload, CUDA graphs, quantization, speculative decoding,
+KV offload, quantization, speculative decoding,
 multi-GPU execution, broader APIs, and additional model families remain
 deliberately deferred beyond this packed/demand-paged milestone.
 
@@ -233,6 +236,7 @@ modal run nvidia_aiperf.py
 modal run nvidia_profile.py
 modal run reliability.py --duration-seconds 120
 modal run -w artifacts/ragged-a100-correctness.json modal_app.py::remote_ragged_a100_tests
+modal run -w artifacts/compatibility-candidate-l4.json modal_app.py::compatibility_smoke
 modal run -w artifacts/llama-ragged-l4.json modal_app.py::llama_ragged_smoke
 modal run -w artifacts/cuda-graph-l4.json modal_app.py::cuda_graph_benchmark
 ```

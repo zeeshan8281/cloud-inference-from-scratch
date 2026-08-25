@@ -18,11 +18,17 @@ def record(name: str, passed: bool, detail: str = "") -> None:
 
 def reference_tokens(prompts: list[str], max_new_tokens: int) -> list[list[int]]:
     import torch
+    import transformers
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+    dtype_arg = (
+        {"dtype": torch.float16}
+        if int(transformers.__version__.split(".")[0]) >= 5
+        else {"torch_dtype": torch.float16}
+    )
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_DIR, torch_dtype=torch.float16, attn_implementation="eager"
+        MODEL_DIR, attn_implementation="eager", **dtype_arg
     ).to("cuda").eval()
     outputs = []
     with torch.no_grad():
