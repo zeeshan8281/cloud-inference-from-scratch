@@ -207,6 +207,9 @@ class RaggedRunner(RunnerBase):
         self.forward_plans: deque[tuple[tuple[str, int, int, bool], ...]] = deque(
             maxlen=256
         )
+        self.cuda_graph_captures = 0
+        self.cuda_graph_replays = 0
+        self._decode_graphs: dict[int, tuple[PackedBatch, Any, Any]] = {}
 
     def admit(self, request: Request) -> None:
         self.cache.reserve(request.request_id, 0)
@@ -255,7 +258,12 @@ class RaggedRunner(RunnerBase):
                 logit_indices.append(end - 1)
 
         tables = [self.cache.block_table(item.request.request_id) for item in plan.items]
-        width = max((len(table) for table in tables), default=1)
+        width = (
+            (self.config.max_model_len + self.config.block_size - 1)
+            // self.config.block_size
+            if self.config.cuda_graph_decode and self.device == "cuda"
+            else max((len(table) for table in tables), default=1)
+        )
         block_tables = torch.zeros(
             (len(tables), width), dtype=torch.int32, device=self.device
         )
@@ -288,6 +296,69 @@ class RaggedRunner(RunnerBase):
             sampled_request_ids=tuple(sampled_request_ids),
         )
 
+    @staticmethod
+    def _copy_packed(target: PackedBatch, source: PackedBatch) -> None:
+        target.input_ids.copy_(source.input_ids)
+        target.logit_indices.copy_(source.logit_indices)
+        for name in (
+            "positions",
+            "query_start_loc",
+            "block_tables",
+            "slot_mapping",
+            "query_seq_ids",
+        ):
+            getattr(target.context, name).copy_(getattr(source.context, name))
+
+    def _graph_forward(self, packed: PackedBatch) -> Any:
+        import torch
+
+        batch_size = packed.input_ids.shape[0]
+        cached = self._decode_graphs.get(batch_size)
+        if cached is not None:
+            static, graph, logits = cached
+            self._copy_packed(static, packed)
+            graph.replay()
+            self.cuda_graph_replays += 1
+            return logits
+
+        static_context = PackedContext(
+            request_ids=packed.context.request_ids,
+            query_ranges=packed.context.query_ranges,
+            context_lens=packed.context.context_lens,
+            final_lens=packed.context.final_lens,
+            positions=packed.context.positions.clone(),
+            query_start_loc=packed.context.query_start_loc.clone(),
+            block_tables=packed.context.block_tables.clone(),
+            slot_mapping=packed.context.slot_mapping.clone(),
+            query_seq_ids=packed.context.query_seq_ids.clone(),
+        )
+        static = PackedBatch(
+            input_ids=packed.input_ids.clone(),
+            context=static_context,
+            logit_indices=packed.logit_indices.clone(),
+            sampled_request_ids=packed.sampled_request_ids,
+        )
+        warmup = torch.cuda.Stream()
+        warmup.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(warmup):
+            self.model(
+                static.input_ids,
+                ctx=static.context,
+                logit_indices=static.logit_indices,
+            )
+        torch.cuda.current_stream().wait_stream(warmup)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            logits = self.model(
+                static.input_ids,
+                ctx=static.context,
+                logit_indices=static.logit_indices,
+            )
+        graph.replay()
+        self._decode_graphs[batch_size] = (static, graph, logits)
+        self.cuda_graph_captures += 1
+        return logits
+
     def execute_batch(self, plan: BatchPlan) -> dict[str, int]:
         import torch
 
@@ -312,10 +383,22 @@ class RaggedRunner(RunnerBase):
         with nvtx_range(
             f"ragged.forward.{phase}.requests_{len(plan.items)}.tokens_{plan.token_count}"
         ):
-            logits = self.model(
-                packed.input_ids,
-                ctx=packed.context,
-                logit_indices=packed.logit_indices,
+            # ponytail: common powers of two bound graph memory; add bucketing only
+            # if production traces show meaningful traffic at other batch sizes.
+            use_graph = (
+                self.config.cuda_graph_decode
+                and self.device == "cuda"
+                and phase == "decode"
+                and len(plan.items) in {1, 2, 4, 8, 16}
+            )
+            logits = (
+                self._graph_forward(packed)
+                if use_graph
+                else self.model(
+                    packed.input_ids,
+                    ctx=packed.context,
+                    logit_indices=packed.logit_indices,
+                )
             )
         with nvtx_range("ragged.kv.commit"):
             self.cache.commit_lengths(
@@ -588,6 +671,8 @@ class InferenceEngine:
             base["scheduler"]["max_forward_request_count"] = (
                 self.runner.max_forward_request_count
             )
+            base["scheduler"]["cuda_graph_captures"] = self.runner.cuda_graph_captures
+            base["scheduler"]["cuda_graph_replays"] = self.runner.cuda_graph_replays
             base["scheduler"]["last_forward_request_ids"] = list(
                 self.runner.forward_traces[-1] if self.runner.forward_traces else ()
             )

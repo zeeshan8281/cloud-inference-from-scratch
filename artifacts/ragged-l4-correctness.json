@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_revision": "65c504843e30f7cc86f58665df5d30717e42feb7+tree-a6684dc3cce6",
+  "source_revision": "9b8450e03fe2f67fc3c210820ceedb33acc3fcac+tree-4e31ae3a3fc8",
   "model": "Qwen/Qwen2.5-3B",
   "model_revision": "3aab1f1954e9cc14eb9509a215f9e5ca08227a9b",
   "gpu": "NVIDIA L4",
@@ -9,7 +9,7 @@
     9
   ],
   "total_memory_bytes": 23659151360,
-  "elapsed_seconds": 63.176,
+  "elapsed_seconds": 70.69,
   "passed": 20,
   "failed": 0,
   "checks": [

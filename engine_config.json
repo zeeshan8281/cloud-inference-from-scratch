@@ -28,6 +28,7 @@
     "max_queue_size": 64,
     "max_batched_tokens": 2048,
     "prefill_chunk_size": 256,
+    "cuda_graph_decode": true,
     "queue_timeout_seconds": 60,
     "stream_queue_capacity": 32,
     "slow_consumer_timeout_seconds": 10

@@ -36,6 +36,7 @@ class EngineConfig:
     max_queue_size: int
     max_batched_tokens: int
     prefill_chunk_size: int
+    cuda_graph_decode: bool
     queue_timeout_seconds: float
     stream_queue_capacity: int
     slow_consumer_timeout_seconds: float
@@ -91,6 +92,7 @@ def build_config(
         max_queue_size=scheduler["max_queue_size"],
         max_batched_tokens=scheduler["max_batched_tokens"],
         prefill_chunk_size=scheduler.get("prefill_chunk_size", scheduler["max_batched_tokens"]),
+        cuda_graph_decode=scheduler.get("cuda_graph_decode", False),
         queue_timeout_seconds=scheduler["queue_timeout_seconds"],
         stream_queue_capacity=scheduler["stream_queue_capacity"],
         slow_consumer_timeout_seconds=scheduler["slow_consumer_timeout_seconds"],
@@ -118,6 +120,8 @@ def validate_config(config: EngineConfig) -> None:
         raise ValueError("batch token limits must be positive")
     if not 1 <= config.max_model_len <= 2048 * 8:
         raise ValueError("max_model_len out of range")
+    if config.mode == "ragged" and config.max_model_len > 4096:
+        raise ValueError("ragged Triton mode supports max_model_len <= 4096")
     if config.block_size != 16:
         # The Triton kernel is compiled against block size 16 (PRD FR7).
         raise ValueError("block_size must be 16 for v1")

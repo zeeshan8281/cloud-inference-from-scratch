@@ -335,6 +335,13 @@ def _execute_ragged_smoke(model_spec: dict, label: str) -> dict:
     got = [result.token_ids for result in results]
     if got != reference:
         raise RuntimeError(f"ragged token parity failed: got={got}, reference={reference}")
+    graph_captures = snapshot["scheduler"]["cuda_graph_captures"]
+    graph_replays = snapshot["scheduler"]["cuda_graph_replays"]
+    if config.cuda_graph_decode and (graph_captures < 1 or graph_replays < 1):
+        raise RuntimeError(
+            f"CUDA graph decode was not exercised: captures={graph_captures}, "
+            f"replays={graph_replays}"
+        )
     print(f"max request IDs in one model invocation: {max_requests}")
     print(f"last packed IDs: {snapshot['scheduler']['last_forward_request_ids']}")
     print("token parity vs Hugging Face: exact")
@@ -347,6 +354,8 @@ def _execute_ragged_smoke(model_spec: dict, label: str) -> dict:
         "oracle_sequences": len(reference),
         "tokens_per_sequence": 8,
         "max_forward_request_count": max_requests,
+        "cuda_graph_captures": graph_captures,
+        "cuda_graph_replays": graph_replays,
     }
 
 
@@ -359,6 +368,102 @@ def llama_ragged_smoke() -> str:
     result["gpu"] = torch.cuda.get_device_name(0)
     result["compute_capability"] = list(torch.cuda.get_device_capability())
     return json.dumps(result, indent=2) + "\n"
+
+
+@app.function(**_gpu_options(timeout=1800))
+def cuda_graph_benchmark() -> str:
+    """Paired L4 decode benchmark with exact-token and replay gates."""
+    import asyncio
+    import statistics
+
+    import torch
+
+    from cloud_engine.config import build_config
+    from cloud_engine.engine import InferenceEngine
+    from cloud_engine.scheduler import GenerationConfig
+
+    _print_run_header("paired eager versus CUDA-graph decode benchmark")
+    model_dir = _prepare_weights(MODEL)
+
+    async def run() -> dict:
+        engines = {}
+        for name, enabled in (("eager", False), ("cuda_graph", True)):
+            config = build_config(
+                "ragged",
+                model_id=MODEL["id"],
+                model_revision=MODEL["revision"],
+                max_model_len=MODEL["max_model_len"],
+                eos_token_id=MODEL["eos_token_id"],
+                max_active_sequences=4,
+                prefix_cache_max_blocks=0,
+                cuda_graph_decode=enabled,
+            )
+            engines[name] = InferenceEngine(config, model_dir=model_dir)
+            await engines[name].start()
+
+        async def generate(engine: InferenceEngine, prompts: list[str], tokens: int):
+            handles = [
+                await engine.submit(
+                    prompt, GenerationConfig(max_output_tokens=tokens, eos_token_id=None)
+                )
+                for prompt in prompts
+            ]
+            return await asyncio.gather(*(handle.wait() for handle in handles))
+
+        warmup = [f"CUDA graph warmup request {index}." for index in range(4)]
+        await generate(engines["eager"], warmup, 8)
+        await generate(engines["cuda_graph"], warmup, 8)
+        timings = {"eager": [], "cuda_graph": []}
+        parity = True
+        try:
+            for trial in range(3):
+                prompts = [
+                    f"Trial {trial}, sequence {index}: explain GPU launch overhead."
+                    for index in range(4)
+                ]
+                outputs = {}
+                for name in (("eager", "cuda_graph") if trial % 2 == 0 else ("cuda_graph", "eager")):
+                    torch.cuda.synchronize()
+                    started = time.perf_counter()
+                    outputs[name] = await generate(engines[name], prompts, 32)
+                    torch.cuda.synchronize()
+                    timings[name].append((time.perf_counter() - started) * 1000)
+                parity &= [result.token_ids for result in outputs["eager"]] == [
+                    result.token_ids for result in outputs["cuda_graph"]
+                ]
+            graph_metrics = engines["cuda_graph"].snapshot_metrics()["scheduler"]
+        finally:
+            await asyncio.gather(*(engine.close() for engine in engines.values()))
+
+        medians = {name: statistics.median(values) for name, values in timings.items()}
+        speedup = medians["eager"] / medians["cuda_graph"]
+        if not parity or graph_metrics["cuda_graph_replays"] < 1:
+            raise RuntimeError(
+                f"CUDA graph gate failed: parity={parity}, metrics={graph_metrics}"
+            )
+        return {
+            "schema_version": 1,
+            "source_revision": os.environ.get("SOURCE_COMMIT", SOURCE_COMMIT),
+            "model": MODEL["id"],
+            "model_revision": MODEL["revision"],
+            "gpu": torch.cuda.get_device_name(0),
+            "compute_capability": list(torch.cuda.get_device_capability()),
+            "protocol": {
+                "trials": 3,
+                "concurrency": 4,
+                "output_tokens_per_request": 32,
+                "warmup_output_tokens": 8,
+                "alternating_order": True,
+            },
+            "exact_token_parity": parity,
+            "cuda_graph_captures": graph_metrics["cuda_graph_captures"],
+            "cuda_graph_replays": graph_metrics["cuda_graph_replays"],
+            "trial_ms": {name: [round(value, 3) for value in values] for name, values in timings.items()},
+            "median_ms": {name: round(value, 3) for name, value in medians.items()},
+            "speedup": round(speedup, 4),
+        }
+
+    return json.dumps(asyncio.run(run()), indent=2) + "\n"
 
 
 def _reference_generate(

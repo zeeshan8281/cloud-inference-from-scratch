@@ -69,6 +69,13 @@ class TestCommittedEvidence(unittest.TestCase):
         self.assertGreaterEqual(result["max_forward_request_count"], 4)
         self.assertEqual(result["gpu"], "NVIDIA L4")
 
+    def test_cuda_graph_performance_gate(self) -> None:
+        result = json.loads((ARTIFACTS / "cuda-graph-l4.json").read_text())
+        self.assertTrue(result["exact_token_parity"])
+        self.assertGreaterEqual(result["cuda_graph_captures"], 1)
+        self.assertGreaterEqual(result["cuda_graph_replays"], 90)
+        self.assertGreaterEqual(result["speedup"], 1.2)
+
     def test_experiment_correctness_gate(self) -> None:
         result = json.loads(
             (ARTIFACTS / "experiment-short-prefill-first-summary.json").read_text()

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "source_revision": "9b8450e03fe2f67fc3c210820ceedb33acc3fcac+tree-0e7482fd78af",
+  "model": "Qwen/Qwen2.5-0.5B",
+  "model_revision": "060db6499f32faf8b98477b0a26969ef7d8b9987",
+  "gpu": "NVIDIA L4",
+  "compute_capability": [
+    8,
+    9
+  ],
+  "protocol": {
+    "trials": 3,
+    "concurrency": 4,
+    "output_tokens_per_request": 32,
+    "warmup_output_tokens": 8,
+    "alternating_order": true
+  },
+  "exact_token_parity": true,
+  "cuda_graph_captures": 1,
+  "cuda_graph_replays": 99,
+  "trial_ms": {
+    "eager": [
+      1953.401,
+      1393.053,
+      1353.156
+    ],
+    "cuda_graph": [
+      430.576,
+      433.121,
+      419.108
+    ]
+  },
+  "median_ms": {
+    "eager": 1393.053,
+    "cuda_graph": 430.576
+  },
+  "speedup": 3.2353
+}

@@ -94,6 +94,10 @@ async def consume(request) -> list[int]:
 
 
 class TestRaggedScheduler(unittest.IsolatedAsyncioTestCase):
+    async def test_ragged_context_limit_matches_kernel_envelope(self) -> None:
+        with self.assertRaisesRegex(ValueError, "max_model_len <= 4096"):
+            build_config("ragged", pinned=PINNED, max_model_len=4097)
+
     async def test_custom_preemption_policy_selects_victim(self) -> None:
         runner = FakePackedRunner(token_capacity=10)
         scheduler = make_scheduler(runner, max_batched_tokens=8, prefill_chunk_size=4)

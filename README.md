@@ -28,7 +28,7 @@ Modal; the local package intentionally has no ML runtime dependencies.
 
 Verified on 2026-08-26:
 
-- 60/60 dependency-light local tests passed; CI repeats them on Python 3.10,
+- 62/62 dependency-light local tests passed; CI repeats them on Python 3.10,
   3.12, and 3.13 with commit-pinned actions.
 - 53/53 tests plus real FastAPI route/auth integration passed in Modal's CPU image
   before the committed-artifact integrity checks were added.
@@ -42,6 +42,9 @@ Verified on 2026-08-26:
   pinned model revision, source identity, and every check result.
 - The untied-head Llama path generated four packed TinyLlama-1.1B sequences on
   L4 with all 32 token IDs exactly equal to the Hugging Face oracle.
+- Fixed-shape decode CUDA graphs preserved exact tokens across three paired L4
+  trials and reduced median four-request batch latency from 1,393 ms to 431 ms
+  on Qwen2.5-0.5B (3.24x), with one capture and 99 measured replays.
 - Ragged Triton matched the Torch oracle at batches 1/2/4/8/16 and contexts
   through 4,002 tokens; worst observed absolute difference was 0.00195. The
   serial Triton kernel also matched at head dimension 128 and context 4,096.
@@ -230,15 +233,15 @@ modal run nvidia_profile.py
 modal run reliability.py --duration-seconds 120
 modal run -w artifacts/ragged-a100-correctness.json modal_app.py::remote_ragged_a100_tests
 modal run -w artifacts/llama-ragged-l4.json modal_app.py::llama_ragged_smoke
+modal run -w artifacts/cuda-graph-l4.json modal_app.py::cuda_graph_benchmark
 ```
 
 The first command writes NVIDIA AIPerf's native multi-run records. The second
 writes an Nsight `.nsys-rep`, a PyTorch CUDA trace, checksums, source identity,
-and profiler capability flags. The last command repeats the full correctness
-and pressure suite on A100 and captures its machine-readable result. The final
-command proves a second model family against the HF oracle. These commands
-refuse to publish an artifact when
-their workload or report validation fails. The reliability runner additionally
+and profiler capability flags. The final three commands capture the A100
+correctness suite, Llama-family oracle proof, and paired CUDA-graph benchmark.
+These commands refuse to publish an artifact when their workload or report
+validation fails. The reliability runner additionally
 injects deterministic cancellations and rebuilds the engine after timed load.
 
 The script reads the existing API key from the Modal Secret, then demonstrates
@@ -322,6 +325,17 @@ records the same 20/20 model-oracle, packed-forward, Triton numerical-envelope,
 chunked-prefill, scheduling, preemption, allocator, and prefix-reuse checks on
 an NVIDIA A100-SXM4-40GB (Ampere, compute capability 8.0). This complements the
 L4 (Ada) evidence without implying that DGX Spark/GB10 has been tested.
+
+### CUDA graph decode
+
+The committed [paired L4 artifact](artifacts/cuda-graph-l4.json) compares the
+same Qwen2.5-0.5B ragged engine with decode graphs disabled and enabled after
+equal warmups. Across three alternating-order trials at concurrency four and 32
+output tokens per request, graph replay preserved exact tokens and improved
+median batch latency from 1,393 ms to 431 ms (3.24x). Runtime metrics recorded
+one graph capture and 99 replays. Graphs are bounded to decode batches
+1/2/4/8/16; other shapes execute eagerly instead of growing graph memory without
+limit.
 
 ### Reliability soak
 
@@ -681,7 +695,7 @@ The deployed release supports one pinned 3B Qwen revision; the separate Llama
 path is correctness-verified but not exposed by that endpoint. Both paths are
 FP16-only. Serving uses a single L4, greedy text-only generation, a 4,096-token
 project context limit, and a narrow Responses-style API. It has no sampling, instruction/chat template,
-quantization, cache swapping/offload, CUDA graphs, fused non-
+quantization, cache swapping/offload, fused non-
 attention kernels, speculative decoding, tensor parallelism, multi-GPU support,
 persistent metrics, tenant isolation, or user system.
 

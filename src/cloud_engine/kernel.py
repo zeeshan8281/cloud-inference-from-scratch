@@ -185,7 +185,9 @@ def ragged_attention_direct(
         raise KernelUnsupported("one sequence id and absolute position are required per query")
     if q.shape[0] < 1:
         raise KernelUnsupported("ragged batch cannot be empty")
-    if int(positions.max().item()) >= SUPPORTED_RAGGED_MAX_SEQ_LEN:
+    # Host synchronization is illegal during CUDA graph capture. Ragged engine
+    # config enforces this bound globally; eager direct callers still fail here.
+    if not torch.cuda.is_current_stream_capturing() and int(positions.max().item()) >= SUPPORTED_RAGGED_MAX_SEQ_LEN:
         raise KernelUnsupported(
             f"ragged sequence exceeds {SUPPORTED_RAGGED_MAX_SEQ_LEN} tokens"
         )

@@ -20,7 +20,7 @@ standardized load measurement, and a 1,936-request cancellation/restart soak on
 one pinned Qwen model and one L4. Bounded prefix reuse has L4 parity and
 work-reduction evidence, the same 20-check suite passes on A100, and exact packed
 oracle parity passes on both Qwen2 and Llama-family checkpoints.
-Quantization, CUDA graphs,
+CUDA graph decode has exact-token and 3.24x paired L4 evidence. Quantization,
 durable telemetry, tenant controls, and upgrade coverage remain open. This is
 therefore not yet a 9/10 production engine.
 
