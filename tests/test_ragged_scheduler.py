@@ -69,15 +69,17 @@ class FakePackedRunner:
         return outputs
 
 
-def make_scheduler(runner: FakePackedRunner, **overrides) -> Scheduler:
+def make_scheduler(runner: FakePackedRunner, scheduling_priority=None, **overrides) -> Scheduler:
     scheduler_config = dict(PINNED["scheduler"])
     scheduler_config.update(overrides)
     pinned = {**PINNED, "scheduler": scheduler_config}
+    kwargs = {"scheduling_priority": scheduling_priority} if scheduling_priority else {}
     return Scheduler(
         build_config("ragged", pinned=pinned),
         runner,
         Metrics(),
         idle_sleep_seconds=0.001,
+        **kwargs,
     )
 
 
@@ -92,6 +94,22 @@ async def consume(request) -> list[int]:
 
 
 class TestRaggedScheduler(unittest.IsolatedAsyncioTestCase):
+    async def test_custom_priority_reorders_prefill_without_bypassing_budget(self) -> None:
+        runner = FakePackedRunner()
+        scheduler = make_scheduler(
+            runner,
+            scheduling_priority=lambda candidate: (candidate.remaining_tokens,),
+            max_batched_tokens=4,
+        )
+        long = await scheduler.submit("long", [1] * 8, GenerationConfig(max_output_tokens=1))
+        short = await scheduler.submit("short", [2] * 2, GenerationConfig(max_output_tokens=1))
+        scheduler._admit_waiting()
+
+        plan = scheduler._build_batch_plan()
+
+        self.assertEqual(plan.request_ids, (short.request_id, long.request_id))
+        self.assertEqual(plan.token_count, 4)
+
     async def test_multiple_requests_share_one_forward(self) -> None:
         runner = FakePackedRunner()
         scheduler = make_scheduler(runner)

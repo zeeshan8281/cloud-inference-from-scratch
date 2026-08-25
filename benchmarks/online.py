@@ -107,6 +107,7 @@ async def run_engine_sweep(
     duration_seconds: float,
     slo_ttft_ms: float,
     slo_itl_ms: float,
+    implementation: str = "ragged-l4",
 ) -> dict[str, Any]:
     from cloud_engine.scheduler import GenerationConfig
 
@@ -177,7 +178,7 @@ async def run_engine_sweep(
         )
         results.append(summary)
     return {
-        "implementation": "ragged-l4",
+        "implementation": implementation,
         "workload_hash": workload_hash(items),
         "workload": [asdict(item) | {"prompt": None} for item in items],
         "arrival_rates": arrival_rates,

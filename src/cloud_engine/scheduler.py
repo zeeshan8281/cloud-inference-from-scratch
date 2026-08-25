@@ -165,6 +165,23 @@ class BatchPlan:
         return tuple(item.request.request_id for item in self.items)
 
 
+@dataclass(frozen=True)
+class SchedulingCandidate:
+    """Read-only scheduling input exposed to experiments."""
+
+    request_id: str
+    phase: str
+    remaining_tokens: int
+    prompt_tokens: int
+    generated_tokens: int
+    arrival_ns: int
+
+
+def decode_first_priority(candidate: SchedulingCandidate) -> tuple[int]:
+    """Production policy: decode before prefill; stable sort preserves FIFO."""
+    return (candidate.phase != "decode",)
+
+
 class Scheduler:
     """Iteration loop: reap -> decode active -> admit+prefill -> publish."""
 
@@ -175,12 +192,14 @@ class Scheduler:
         metrics: Any,
         clock: Callable[[], int] = time.monotonic_ns,
         idle_sleep_seconds: float = 0.005,
+        scheduling_priority: Callable[[SchedulingCandidate], tuple[Any, ...]] = decode_first_priority,
     ) -> None:
         self.config = config
         self.runner = runner
         self.metrics = metrics
         self.clock = clock
         self.idle_sleep_seconds = idle_sleep_seconds
+        self.scheduling_priority = scheduling_priority
         self.waiting: deque[Request] = deque()
         self.active: list[Request] = []
         self._task: asyncio.Task | None = None
@@ -425,27 +444,41 @@ class Scheduler:
             and request.stalled_since_ns is None
         ]
 
-        decode: list[Request] = []
-        prefill: list[Request] = []
+        candidates: list[tuple[SchedulingCandidate, Request]] = []
         for request in eligible:
             known = len(request.prompt_token_ids) + request.generated_count
             remaining = known - request.tokens_fed
             if remaining <= 0:
                 continue
-            if request.state is RequestState.DECODING and remaining == 1:
-                decode.append(request)
-            else:
-                prefill.append(request)
+            phase = (
+                "decode"
+                if request.state is RequestState.DECODING and remaining == 1
+                else "prefill"
+            )
+            candidates.append(
+                (
+                    SchedulingCandidate(
+                        request_id=request.request_id,
+                        phase=phase,
+                        remaining_tokens=remaining,
+                        prompt_tokens=len(request.prompt_token_ids),
+                        generated_tokens=request.generated_count,
+                        arrival_ns=request.arrival_ns,
+                    ),
+                    request,
+                )
+            )
 
-        decode_ids = {id(request) for request in decode}
-        for request in (*decode, *prefill):
+        for candidate, request in sorted(
+            candidates, key=lambda pair: self.scheduling_priority(pair[0])
+        ):
             if budget <= 0:
                 break
             known_ids = request.prompt_token_ids + request.generated_token_ids
             remaining = len(known_ids) - request.tokens_fed
             if remaining <= 0:
                 continue
-            limit = 1 if id(request) in decode_ids else self.config.prefill_chunk_size
+            limit = 1 if candidate.phase == "decode" else self.config.prefill_chunk_size
             query_length = min(remaining, limit, budget)
             start = request.tokens_fed
             end = start + query_length

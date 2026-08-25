@@ -188,6 +188,17 @@ For a recording-ready walkthrough of the deployed engine:
 modal run demo.py
 ```
 
+To change the scheduling policy and measure it against the production default,
+copy the [starter experiment](experiments/starter.py), edit `priority(candidate)`,
+and run:
+
+```bash
+modal run experiment.py --experiment experiments/starter.py
+```
+
+This refuses to benchmark unless token parity, packed execution, and KV cleanup
+pass first, then writes both baseline and experiment results to `artifacts/`.
+
 The script reads the existing API key from the Modal Secret, then demonstrates
 readiness, rejected unauthenticated access, blocking generation, live SSE text,
 ordered events, token usage, and engine metrics without printing the key.

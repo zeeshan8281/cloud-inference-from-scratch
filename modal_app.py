@@ -38,6 +38,9 @@ def _source_commit() -> str:
         ).strip()
         digest = sha256()
         paths = [Path(__file__), Path(__file__).parent / "engine_config.json"]
+        experiment_runner = Path(__file__).parent / "experiment.py"
+        if experiment_runner.is_file():
+            paths.append(experiment_runner)
         for directory in ("src", "benchmarks", "tests"):
             paths.extend(sorted((Path(__file__).parent / directory).rglob("*.py")))
         for path in paths:
