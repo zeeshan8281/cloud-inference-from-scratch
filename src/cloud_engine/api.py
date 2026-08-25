@@ -12,7 +12,17 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any
 
-ALLOWED_FIELDS = frozenset({"model", "input", "max_output_tokens", "temperature", "stream"})
+ALLOWED_FIELDS = frozenset(
+    {
+        "model",
+        "input",
+        "instructions",
+        "max_output_tokens",
+        "temperature",
+        "stream",
+        "stream_options",
+    }
+)
 MAX_BODY_BYTES = 64 * 1024
 
 
@@ -43,6 +53,31 @@ class ValidatedRequest:
     stream: bool
 
 
+def _input_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list) or not value:
+        raise ApiError(400, "unsupported_input_type", "input must contain text")
+    parts: list[str] = []
+    for message in value:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            raise ApiError(400, "unsupported_input_type", "only user text messages are supported")
+        content = message.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+            continue
+        if not isinstance(content, list) or not content:
+            raise ApiError(400, "unsupported_input_type", "message content must contain text")
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "input_text":
+                raise ApiError(400, "unsupported_input_type", "only input_text blocks are supported")
+            text = block.get("text")
+            if not isinstance(text, str):
+                raise ApiError(400, "unsupported_input_type", "input_text.text must be a string")
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
 def validate_payload(data: Any, *, model_id: str, default_max_output_tokens: int) -> ValidatedRequest:
     if not isinstance(data, dict):
         raise ApiError(400, "invalid_request", "request body must be a JSON object")
@@ -58,12 +93,18 @@ def validate_payload(data: Any, *, model_id: str, default_max_output_tokens: int
     if data["model"] != model_id:
         raise ApiError(400, "invalid_model", f"model must be {model_id!r}")
 
-    raw_input = data["input"]
-    if not isinstance(raw_input, str) or not raw_input.strip():
+    if "input" not in data:
+        raise ApiError(400, "invalid_request", "'input' is required")
+    raw_input = _input_text(data["input"])
+    instructions = data.get("instructions", "")
+    if not isinstance(instructions, str):
+        raise ApiError(400, "unsupported_input_type", "instructions must be a string")
+    prompt = "\n\n".join(part for part in (instructions.strip(), raw_input.strip()) if part)
+    if not prompt:
         raise ApiError(
             400,
             "unsupported_input_type",
-            "input must be a non-empty string; arrays, files, and message objects are not supported in v1",
+            "input must contain non-empty text",
         )
 
     raw_max = data.get("max_output_tokens", default_max_output_tokens)
@@ -81,10 +122,17 @@ def validate_payload(data: Any, *, model_id: str, default_max_output_tokens: int
     raw_stream = data.get("stream", False)
     if not isinstance(raw_stream, bool):
         raise ApiError(400, "invalid_stream", "stream must be a boolean")
+    stream_options = data.get("stream_options")
+    if stream_options is not None and stream_options != {"include_usage": True}:
+        raise ApiError(
+            400,
+            "unsupported_parameter",
+            "stream_options supports only include_usage=true",
+        )
 
     return ValidatedRequest(
         model=data["model"],
-        input=raw_input,
+        input=prompt,
         max_output_tokens=raw_max,
         temperature=float(raw_temp),
         stream=raw_stream,

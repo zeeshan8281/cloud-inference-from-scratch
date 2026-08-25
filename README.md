@@ -22,10 +22,10 @@ runtime dependencies.
 
 ## Release status
 
-Verified on 2026-08-25:
+Verified on 2026-08-26:
 
-- 49/49 dependency-light local tests passed.
-- 49/49 tests plus real FastAPI route/auth integration passed in Modal's CPU image.
+- 52/52 dependency-light local tests passed.
+- 52/52 tests plus real FastAPI route/auth integration passed in Modal's CPU image.
 - 34/34 legacy L4 regression checks passed in 208.3 seconds.
 - 16/16 Qwen2.5-3B Ragged L4 checks passed in 63.1 seconds: exact HF tokens,
   four request IDs in one transformer invocation, 4,000-token chunked prefill,
@@ -40,6 +40,10 @@ Verified on 2026-08-25:
 - The deployed Ragged API passed public readiness, unauthenticated rejection,
   authenticated blocking generation, ordered SSE with token usage, and
   authenticated metrics checks against the external production URL.
+- NVIDIA AIPerf 0.12.0 completed 60/60 measured Responses-API requests across
+  three runs with zero errors, plus two excluded warmups per run.
+- NVIDIA Nsight Systems 2026.1.3 captured and validated the engine's NVTX phase
+  ranges on L4; a companion PyTorch trace contains 13,667 CUDA kernel records.
 
 ## What “from scratch” means here
 
@@ -199,6 +203,18 @@ modal run experiment.py --experiment experiments/starter.py
 This refuses to benchmark unless token parity, packed execution, and KV cleanup
 pass first, then writes both baseline and experiment results to `artifacts/`.
 
+For standardized endpoint load data and GPU timelines:
+
+```bash
+modal run nvidia_aiperf.py
+modal run nvidia_profile.py
+```
+
+The first command writes NVIDIA AIPerf's native multi-run records. The second
+writes an Nsight `.nsys-rep`, a PyTorch CUDA trace, checksums, source identity,
+and profiler capability flags. Both refuse to publish an artifact when their
+workload or report validation fails.
+
 The script reads the existing API key from the Modal Secret, then demonstrates
 readiness, rejected unauthenticated access, blocking generation, live SSE text,
 ordered events, token usage, and engine metrics without printing the key.
@@ -231,6 +247,47 @@ downloaded to your Mac. Later runs reuse the image and Volume caches. Ephemeral
 containers scale to zero after 60 seconds.
 
 ## Reproducible benchmark results
+
+### NVIDIA AIPerf Responses-API profile
+
+The committed [native AIPerf artifact](artifacts/aiperf-responses.zip) uses
+AIPerf 0.12.0 against the deployed streaming `/v1/responses` endpoint: three
+profile runs, 20 requests per run, concurrency four, deterministic synthetic
+128-token inputs, 32 requested output tokens, and two excluded warmups per run.
+All 60 measured requests completed with exact server-reported token counts and
+zero errors.
+
+| Aggregate across three runs | Mean | Range |
+|---|---:|---:|
+| TTFT p50 | 705.9 ms | 702.6–711.9 ms |
+| TTFT p99 | 1,109.6 ms | 1,085.1–1,125.2 ms |
+| ITL p50 | 72.18 ms | 72.14–72.24 ms |
+| ITL p99 | 76.43 ms | 72.75–78.30 ms |
+| Request latency p99 | 3,345.8 ms | 3,322.9–3,364.4 ms |
+| Output throughput | 41.08 tok/s | 40.83–41.22 tok/s |
+| Request throughput | 1.284 req/s | 1.276–1.288 req/s |
+
+The archive contains all per-request JSONL records, input metadata, per-run and
+aggregate JSON/CSV summaries, logs, AIPerf version, model revision, and source
+tree identity. The API accepts AIPerf's standard text-message input shape; it
+still rejects multimodal and non-user message blocks.
+
+### NVIDIA GPU profiling
+
+The committed [profiling artifact](artifacts/nsight-ragged-l4.zip) contains:
+
+- an NVIDIA Nsight Systems 2026.1.3 `.nsys-rep` with validated NVTX ranges for
+  batch planning, batch execution, mixed/decode forwards, KV growth/commit, and
+  greedy sampling; and
+- a PyTorch/CUPTI Chrome trace with 13,667 CUDA kernel records from the same
+  four-request, 32-output-token packed L4 workload.
+
+Modal's gVisor container exposed NVTX ranges but no CUDA kernel records to
+Nsight itself, and the artifact says so (`nsight_cuda_kernel_records: false`).
+The companion trace supplies the kernel timeline
+(`pytorch_cuda_kernel_records: true`). On an NVIDIA host such as DGX Spark,
+the same opt-in ranges are available with `ENGINE_NVTX=1` for native Nsight
+capture; DGX Spark execution remains unverified until run on that hardware.
 
 ### Ragged 3B online comparison
 
@@ -461,9 +518,11 @@ response text. The completed event contains input, output, and total token usage
 | `GET /metrics` | Bearer | bounded counters, latency, scheduler, KV, GPU gauges |
 | `POST /v1/responses` | Bearer | blocking JSON or SSE generation |
 
-Accepted request fields are `model`, `input` (non-empty string),
-`max_output_tokens` (1–256), `temperature` (must be `0`), and `stream` (boolean).
-Unknown fields, array/multimodal inputs, the wrong model, nonzero temperature,
+Accepted request fields are `model`, `input`, optional `instructions`,
+`max_output_tokens` (1–256), `temperature` (must be `0`), `stream` (boolean),
+and `stream_options: {"include_usage": true}`. `input` may be a non-empty string
+or AIPerf/OpenAI-style user text messages containing `input_text` blocks.
+Unknown fields, multimodal/non-user blocks, the wrong model, nonzero temperature,
 invalid JSON, bodies over 64 KiB, and context overflow are rejected. Clients
 cannot select engine mode, model revision, cache size, hardware, or fallback
 behavior.
@@ -548,6 +607,9 @@ The next run recreates the Volume and downloads the public model again.
 ```text
 modal_app.py                  Modal image, jobs, deployment, cost controls
 demo.py                       one-command deployed API walkthrough
+experiment.py                 correctness-gated scheduler experiment runner
+nvidia_aiperf.py              NVIDIA AIPerf Responses-API load runner
+nvidia_profile.py             Nsight NVTX + CUDA-kernel trace runner
 engine_config.json           model/dependency/scheduler/cache/cloud pins
 src/cloud_engine/model.py    custom Qwen2 forward path
 src/cloud_engine/weights.py  explicit safetensor mapping and shape validation
@@ -559,7 +621,7 @@ src/cloud_engine/engine.py   runners, PackedBatch, engine facade and handles
 src/cloud_engine/api.py      validation, auth, Responses JSON, SSE
 src/cloud_engine/metrics.py  bounded measurements
 benchmarks/                  deterministic offline and online HTTP workloads
-artifacts/                   baseline plus raw three-way online results
+artifacts/                   raw benchmarks, AIPerf records, GPU traces
 tests/                       local/CPU tests and L4 correctness matrix
 docs/                        architecture and one chapter per stage
 ```

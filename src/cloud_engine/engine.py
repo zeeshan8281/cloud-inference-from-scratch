@@ -26,6 +26,7 @@ from .cache import ContiguousKVCache, PagedKVCache
 from .config import EngineConfig
 from .metrics import Metrics
 from .model import Qwen2CausalLM, greedy_sample, load_model_config
+from .profiling import nvtx_range
 from .scheduler import (
     BatchPlan,
     GenerationConfig,
@@ -218,7 +219,8 @@ class RaggedRunner(RunnerBase):
         import torch
 
         required = {item.request.request_id: item.end_pos for item in plan.items}
-        self.cache.ensure_capacity_batch(required)
+        with nvtx_range("ragged.kv.ensure_capacity"):
+            self.cache.ensure_capacity_batch(required)
 
         input_ids: list[int] = []
         positions: list[int] = []
@@ -300,19 +302,25 @@ class RaggedRunner(RunnerBase):
                 for item in plan.items
             )
         )
-        logits = self.model(
-            packed.input_ids,
-            ctx=packed.context,
-            logit_indices=packed.logit_indices,
-        )
-        self.cache.commit_lengths(
-            {item.request.request_id: item.end_pos for item in plan.items}
-        )
+        phase = "decode" if all(item.is_decode for item in plan.items) else "mixed"
+        with nvtx_range(
+            f"ragged.forward.{phase}.requests_{len(plan.items)}.tokens_{plan.token_count}"
+        ):
+            logits = self.model(
+                packed.input_ids,
+                ctx=packed.context,
+                logit_indices=packed.logit_indices,
+            )
+        with nvtx_range("ragged.kv.commit"):
+            self.cache.commit_lengths(
+                {item.request.request_id: item.end_pos for item in plan.items}
+            )
         for item in plan.items:
             item.request.tokens_fed = item.end_pos
         if not packed.sampled_request_ids:
             return {}
-        token_ids = torch.argmax(logits.to(torch.float32), dim=-1).tolist()
+        with nvtx_range("ragged.sample.greedy"):
+            token_ids = torch.argmax(logits.to(torch.float32), dim=-1).tolist()
         return dict(zip(packed.sampled_request_ids, token_ids, strict=True))
 
 

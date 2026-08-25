@@ -23,6 +23,7 @@ from enum import Enum
 from typing import Any
 
 from .config import effective_active_limit
+from .profiling import nvtx_range
 
 
 class RequestState(Enum):
@@ -350,13 +351,15 @@ class Scheduler:
             progressed = self._reap(now)
             progressed = self._drain_active_streams() or progressed
             progressed = self._admit_waiting() or progressed
-            plan = self._build_batch_plan()
+            with nvtx_range("scheduler.build_batch_plan"):
+                plan = self._build_batch_plan()
             if not plan.items:
                 await asyncio.sleep(0 if progressed else self.idle_sleep_seconds)
                 continue
 
             try:
-                outputs = await self._execute_batch(plan)
+                with nvtx_range("scheduler.execute_batch"):
+                    outputs = await self._execute_batch(plan)
             except Exception as exc:
                 if bool(getattr(exc, "is_capacity_error", False)):
                     if not self._preempt_for_capacity(plan):

@@ -55,9 +55,29 @@ class TestValidation(unittest.TestCase):
     def test_unknown_parameter_rejected(self) -> None:
         self.expect_error({"model": MODEL_ID, "input": "hi", "top_p": 1}, "unsupported_parameter")
 
-    def test_array_input_rejected(self) -> None:
+    def test_responses_message_input_used_by_aiperf(self) -> None:
+        validated = self.validate(
+            {
+                "model": MODEL_ID,
+                "instructions": "Answer briefly.",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Explain paging."}],
+                    }
+                ],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+        )
+        self.assertEqual(validated.input, "Answer briefly.\n\nExplain paging.")
+
+    def test_non_text_array_input_rejected(self) -> None:
         self.expect_error(
-            {"model": MODEL_ID, "input": [{"role": "user", "content": "hi"}]},
+            {
+                "model": MODEL_ID,
+                "input": [{"role": "user", "content": [{"type": "input_image"}]}],
+            },
             "unsupported_input_type",
         )
 
