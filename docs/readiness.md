@@ -29,6 +29,8 @@ therefore not yet a 9/10 production engine.
 - Extension points for multiple policies and bounded runtime parameters.
 - Machine-readable, source-identified, correctness-gated artifacts.
 - Contributor documentation and stable examples across supported models.
+- Commit-pinned CI across every supported Python minor line, including evidence
+  hash and acceptance-threshold checks.
 
 The demo, NVIDIA AIPerf runner, and GPU profiler are working. Experiments can
 change scheduling order, preemption victim selection, active-sequence limits,

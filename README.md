@@ -1,5 +1,7 @@
 # Cloud Inference Engine Lab
 
+[![local contracts](https://github.com/zeeshan8281/cloud-inference-from-scratch/actions/workflows/ci.yml/badge.svg)](https://github.com/zeeshan8281/cloud-inference-from-scratch/actions/workflows/ci.yml)
+
 Build the engine behind an LLM API without owning a GPU.
 
 > **Current release — Ragged L4 Engine:** Qwen2.5-3B, real packed
@@ -25,8 +27,10 @@ runtime dependencies.
 
 Verified on 2026-08-26:
 
-- 53/53 dependency-light local tests passed.
-- 53/53 tests plus real FastAPI route/auth integration passed in Modal's CPU image.
+- 57/57 dependency-light local tests passed; CI repeats them on Python 3.10,
+  3.12, and 3.13 with commit-pinned actions.
+- 53/53 tests plus real FastAPI route/auth integration passed in Modal's CPU image
+  before the four artifact-only integrity checks were added.
 - 34/34 legacy L4 regression checks passed in 208.3 seconds.
 - 20/20 Qwen2.5-3B Ragged L4 checks passed in 66.5 seconds: exact HF tokens,
   four request IDs in one transformer invocation, 4,000-token chunked prefill,
