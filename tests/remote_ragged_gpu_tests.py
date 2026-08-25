@@ -388,7 +388,7 @@ def main() -> int:
     if failed:
         print(json.dumps([{"check": name, "detail": detail} for name, detail in failed], indent=2))
         return 1
-    print("ALL RAGGED L4 CHECKS PASSED")
+    print("ALL RAGGED GPU CHECKS PASSED")
     return 0
 
 

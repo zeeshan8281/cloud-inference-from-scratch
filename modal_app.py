@@ -692,12 +692,12 @@ def remote_gpu_tests() -> None:
         raise RuntimeError("remote GPU correctness suite failed")
 
 
-@app.function(**_gpu_options(timeout=3600))
-def remote_ragged_gpu_tests() -> None:
-    """Qwen2.5-3B packed/ragged correctness and pressure suite on one L4."""
+def _execute_ragged_gpu_suite(label: str) -> str:
     import runpy
 
-    _print_run_header("ragged L4 GPU correctness suite")
+    import torch
+
+    _print_run_header(label)
     model_dir = _prepare_weights(RAGGED_MODEL)
     tests_dir = Path(__file__).parent / "tests"
     suite = runpy.run_path(
@@ -705,8 +705,41 @@ def remote_ragged_gpu_tests() -> None:
         run_name="__ragged_gpu_tests_loaded__",
         init_globals={"MODEL_DIR": model_dir},
     )
+    started = time.time()
     if suite["main"]():
         raise RuntimeError("ragged remote GPU correctness suite failed")
+    properties = torch.cuda.get_device_properties(0)
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "source_revision": os.environ.get("SOURCE_COMMIT", SOURCE_COMMIT),
+            "model": RAGGED_MODEL["id"],
+            "model_revision": RAGGED_MODEL["revision"],
+            "gpu": properties.name,
+            "compute_capability": list(torch.cuda.get_device_capability()),
+            "total_memory_bytes": properties.total_memory,
+            "elapsed_seconds": round(time.time() - started, 3),
+            "passed": sum(ok for _, ok, _ in suite["RESULTS"]),
+            "failed": sum(not ok for _, ok, _ in suite["RESULTS"]),
+            "checks": [
+                {"name": name, "passed": ok, "detail": detail}
+                for name, ok, detail in suite["RESULTS"]
+            ],
+        },
+        indent=2,
+    ) + "\n"
+
+
+@app.function(**_gpu_options(timeout=3600))
+def remote_ragged_gpu_tests() -> str:
+    """Qwen2.5-3B packed/ragged correctness and pressure suite on one L4."""
+    return _execute_ragged_gpu_suite("ragged L4 GPU correctness suite")
+
+
+@app.function(**_gpu_options(gpu="A100-40GB", timeout=3600))
+def remote_ragged_a100_tests() -> str:
+    """The same full suite on a distinct NVIDIA Ampere target."""
+    return _execute_ragged_gpu_suite("ragged A100-40GB GPU correctness suite")
 
 
 @app.function(

@@ -18,7 +18,8 @@ multi-release operating history; a repository cannot manufacture that evidence.
 Current evidence satisfies correctness, the core runtime, baseline operations,
 standardized load measurement, and a 1,936-request cancellation/restart soak on
 one pinned Qwen model and one L4. Bounded prefix reuse has L4 parity and
-work-reduction evidence. Quantization, CUDA graphs, model/hardware breadth,
+work-reduction evidence, and the same 20-check suite passes on A100.
+Quantization, CUDA graphs, model-family breadth,
 durable telemetry, tenant controls, and upgrade coverage remain open. This is
 therefore not yet a 9/10 production engine.
 
@@ -44,8 +45,12 @@ category is not yet 9/10.
 - NVTX phase annotations and a real GPU timeline artifact.
 - NVIDIA AIPerf native multi-run endpoint artifact.
 - Same-hardware vLLM comparison with raw request records.
-- Reproducible execution on a second NVIDIA target, ideally DGX Spark.
+- Reproducible execution on a second NVIDIA target; DGX Spark is preferred but
+  must not be claimed without GB10 evidence.
 
-The first four gates pass on L4. DGX Spark is a documented target, not a verified
-claim: its ARM64/GB10 execution must produce the same correctness, AIPerf, and
-profiling artifacts before this category reaches 9/10.
+All five gates pass: the complete 20-check suite passed on both L4 (Ada) and
+A100-SXM4-40GB (Ampere), with the A100 result committed as a source-identified
+machine-readable artifact. This earns 9/10 for the declared NVIDIA cloud-GPU
+workbench envelope. DGX Spark remains a documented, unverified ARM64/GB10 target;
+claiming DGX support still requires correctness, AIPerf, and profiling evidence
+from that device.

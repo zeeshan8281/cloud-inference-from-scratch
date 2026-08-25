@@ -41,6 +41,16 @@ class TestCommittedEvidence(unittest.TestCase):
         self.assertTrue(metadata["pytorch_cuda_kernel_records"])
         self.assertFalse(metadata["nsight_cuda_kernel_records"])
 
+    def test_a100_correctness_gate(self) -> None:
+        result = json.loads(
+            (ARTIFACTS / "ragged-a100-correctness.json").read_text()
+        )
+        self.assertEqual(result["gpu"], "NVIDIA A100-SXM4-40GB")
+        self.assertEqual(result["compute_capability"], [8, 0])
+        self.assertEqual(result["passed"], 20)
+        self.assertEqual(result["failed"], 0)
+        self.assertTrue(all(check["passed"] for check in result["checks"]))
+
     def test_experiment_correctness_gate(self) -> None:
         result = json.loads(
             (ARTIFACTS / "experiment-short-prefill-first-summary.json").read_text()

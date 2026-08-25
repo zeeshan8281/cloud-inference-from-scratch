@@ -27,7 +27,7 @@ runtime dependencies.
 
 Verified on 2026-08-26:
 
-- 57/57 dependency-light local tests passed; CI repeats them on Python 3.10,
+- 58/58 dependency-light local tests passed; CI repeats them on Python 3.10,
   3.12, and 3.13 with commit-pinned actions.
 - 53/53 tests plus real FastAPI route/auth integration passed in Modal's CPU image
   before the four artifact-only integrity checks were added.
@@ -36,6 +36,9 @@ Verified on 2026-08-26:
   four request IDs in one transformer invocation, 4,000-token chunked prefill,
   decode priority, real pressure recomputation, prefix-hit parity/work reduction,
   and zero leaked request blocks.
+- The identical 20-check suite passed on an NVIDIA A100-SXM4-40GB in 70.1
+  seconds; the machine-readable artifact records compute capability 8.0, the
+  pinned model revision, source identity, and every check result.
 - Ragged Triton matched the Torch oracle at batches 1/2/4/8/16 and contexts
   through 4,002 tokens; worst observed absolute difference was 0.00195. The
   serial Triton kernel also matched at head dimension 128 and context 4,096.
@@ -222,11 +225,14 @@ For standardized endpoint load data and GPU timelines:
 modal run nvidia_aiperf.py
 modal run nvidia_profile.py
 modal run reliability.py --duration-seconds 120
+modal run -w artifacts/ragged-a100-correctness.json modal_app.py::remote_ragged_a100_tests
 ```
 
 The first command writes NVIDIA AIPerf's native multi-run records. The second
 writes an Nsight `.nsys-rep`, a PyTorch CUDA trace, checksums, source identity,
-and profiler capability flags. All three refuse to publish an artifact when
+and profiler capability flags. The last command repeats the full correctness
+and pressure suite on A100 and captures its machine-readable result. All four
+refuse to publish an artifact when
 their workload or report validation fails. The reliability runner additionally
 injects deterministic cancellations and rebuilds the engine after timed load.
 
@@ -303,6 +309,14 @@ The companion trace supplies the kernel timeline
 (`pytorch_cuda_kernel_records: true`). On an NVIDIA host such as DGX Spark,
 the same opt-in ranges are available with `ENGINE_NVTX=1` for native Nsight
 capture; DGX Spark execution remains unverified until run on that hardware.
+
+### Second NVIDIA hardware target
+
+The committed [A100 correctness artifact](artifacts/ragged-a100-correctness.json)
+records the same 20/20 model-oracle, packed-forward, Triton numerical-envelope,
+chunked-prefill, scheduling, preemption, allocator, and prefix-reuse checks on
+an NVIDIA A100-SXM4-40GB (Ampere, compute capability 8.0). This complements the
+L4 (Ada) evidence without implying that DGX Spark/GB10 has been tested.
 
 ### Reliability soak
 
@@ -449,6 +463,7 @@ modal run modal_app.py::api_lifecycle_tests
 # Billable L4: model/oracle/cache/kernel/concurrency/failure/stream checks.
 modal run modal_app.py::remote_gpu_tests
 modal run modal_app.py::remote_ragged_gpu_tests
+modal run -w artifacts/ragged-a100-correctness.json modal_app.py::remote_ragged_a100_tests
 
 # Billable three-way warm HTTP comparison; writes raw JSON locally.
 modal run modal_app.py::online_compare --rates 0.5,1,2,4 --duration-seconds 10

@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "source_revision": "2d207d2551a0913c0935d2abf5d3d42dda42e4f9+tree-beb79357c720",
+  "model": "Qwen/Qwen2.5-3B",
+  "model_revision": "3aab1f1954e9cc14eb9509a215f9e5ca08227a9b",
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "compute_capability": [
+    8,
+    0
+  ],
+  "total_memory_bytes": 42405855232,
+  "elapsed_seconds": 70.142,
+  "passed": 20,
+  "failed": 0,
+  "checks": [
+    {
+      "name": "Qwen2.5-3B ragged tokens equal HF oracle",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "one transformer invocation contains multiple request IDs",
+      "passed": true,
+      "detail": "max_request_ids=4"
+    },
+    {
+      "name": "ragged run leaves no KV blocks",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "ragged Triton == Torch batch=1",
+      "passed": true,
+      "detail": "queries=1 max_context=1 max|\u0394|=0.00000"
+    },
+    {
+      "name": "ragged Triton == Torch batch=2",
+      "passed": true,
+      "detail": "queries=3 max_context=17 max|\u0394|=0.00098"
+    },
+    {
+      "name": "ragged Triton == Torch batch=4",
+      "passed": true,
+      "detail": "queries=26 max_context=33 max|\u0394|=0.00195"
+    },
+    {
+      "name": "ragged Triton == Torch batch=8",
+      "passed": true,
+      "detail": "queries=52 max_context=1040 max|\u0394|=0.00195"
+    },
+    {
+      "name": "ragged Triton == Torch batch=16",
+      "passed": true,
+      "detail": "queries=104 max_context=4002 max|\u0394|=0.00195"
+    },
+    {
+      "name": "ragged kernel worst absolute error < 0.01",
+      "passed": true,
+      "detail": "0.00195"
+    },
+    {
+      "name": "serial Triton supports Qwen2.5-3B at context 4096",
+      "passed": true,
+      "detail": "max|\u0394|=0.00008"
+    },
+    {
+      "name": "4000-token prompt advances in bounded chunks",
+      "passed": true,
+      "detail": "chunks=[256, 256, 256, 256, 256, 256, 256, 256, 256, 256, 256, 256, 256, 256, 256, 160]"
+    },
+    {
+      "name": "decode is scheduled before concurrent long prefill",
+      "passed": true,
+      "detail": "mixed_iterations=15"
+    },
+    {
+      "name": "undersized pool triggers preemption",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "preempted sequence is recomputed",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "pressure recovery preserves deterministic tokens",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "pressure recovery drains allocator",
+      "passed": true,
+      "detail": "used=0"
+    },
+    {
+      "name": "prefix-cache hit preserves exact tokens",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "prefix-cache hit skips block-aligned prefill",
+      "passed": true,
+      "detail": "cold_tokens=272 warm_tokens=16"
+    },
+    {
+      "name": "prefix-cache hit is measured",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "prefix cache retains no request-owned blocks",
+      "passed": true,
+      "detail": "request_blocks=0 prefix_blocks=16"
+    }
+  ]
+}
