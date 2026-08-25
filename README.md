@@ -2,6 +2,11 @@
 
 Build the engine behind an LLM API without owning a GPU.
 
+> **Current release — Ragged L4 Engine:** Qwen2.5-3B, real packed
+> multi-request forwards, decode-first scheduling, chunked prefill,
+> demand-paged KV with recompute preemption, and mixed ragged Triton attention.
+> Verified against serial Triton and vLLM on the same NVIDIA L4.
+
 This repository is an educational, from-scratch inference server for a pinned
 `Qwen/Qwen2.5-3B` base model. It implements a flat multi-request transformer
 forward, decode-first token-budget scheduling, chunked prefill, transactional
