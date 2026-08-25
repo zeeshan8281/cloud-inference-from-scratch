@@ -41,6 +41,7 @@ class EngineConfig:
     slow_consumer_timeout_seconds: float
     block_size: int
     kv_cache_bytes: int
+    prefix_cache_max_blocks: int
     allow_reference_fallback: bool = False
 
 
@@ -95,6 +96,7 @@ def build_config(
         slow_consumer_timeout_seconds=scheduler["slow_consumer_timeout_seconds"],
         block_size=kv["block_size"],
         kv_cache_bytes=kv["bytes"],
+        prefix_cache_max_blocks=kv.get("prefix_cache_max_blocks", 0),
     )
     unknown = set(overrides) - set(values) - {"allow_reference_fallback"}
     if unknown:
@@ -119,6 +121,8 @@ def validate_config(config: EngineConfig) -> None:
     if config.block_size != 16:
         # The Triton kernel is compiled against block size 16 (PRD FR7).
         raise ValueError("block_size must be 16 for v1")
+    if config.prefix_cache_max_blocks < 0:
+        raise ValueError("prefix_cache_max_blocks must be non-negative")
 
 
 def effective_active_limit(config: EngineConfig) -> int:

@@ -67,6 +67,9 @@ same transformer invocation.
 ## KV ownership and pressure recovery
 
 - Admission creates an empty block table; it does not reserve worst-case output.
+- A repeat request may copy the longest block-aligned prompt prefix from a
+  bounded LRU entry in the same physical pool. The final prompt token is always
+  recomputed so its sampling logits stay exact.
 - `ensure_capacity_batch` validates the whole growth operation before assigning
   blocks, so allocation failure cannot partially mutate a batch.
 - K/V writes use a flat slot mapping; cache lengths commit only after a
@@ -77,6 +80,8 @@ same transformer invocation.
   of truth during recomputation.
 - Cancellation, timeout, backpressure failure, model failure, and success all
   converge on the same idempotent release path.
+- Prefix entries are evicted before active requests are preempted and are
+  accounted separately from request-owned blocks.
 
 ## Attention paths
 

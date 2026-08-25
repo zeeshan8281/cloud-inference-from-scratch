@@ -42,13 +42,24 @@ If the pool cannot grow, the scheduler releases one resident victim and later
 recomputes its prompt plus already-generated prefix. Emitted token IDs remain
 authoritative, so recovery does not duplicate or change client-visible output.
 
+## Bounded prefix reuse
+
+The deployed Ragged mode keeps up to 256 block-aligned prompt blocks in the same
+physical KV pool. A hit copies the longest matching prefix into request-owned
+blocks and skips that prefill work. It never caches the last prompt token, so
+the engine recomputes the logits used for the first generated token. Entries
+are LRU-evicted before active sequences are preempted; metrics separate cached
+prefix blocks from live request ownership.
+
 ## Numerical and systems proof
 
 The L4 suite checks exact greedy output against Hugging Face, a real forward
 trace containing four request IDs, mixed-query Torch/Triton parity at batch
 sizes 1/2/4/8/16, block boundaries and contexts through 4,096, decode priority
 during a 4,000-token chunked prefill, and forced recomputation in a 5 MiB KV
-pool. Every run ends with allocator invariants and zero leaked blocks.
+pool. A repeated-prompt test preserves exact output while reducing scheduled
+work from 272 tokens cold to 16 warm. Every run ends with allocator invariants
+and zero leaked request blocks.
 
 The online proof uses the authenticated streaming HTTP path for both custom
 engines and vLLM. All three use the same pinned model/revision, L4, deterministic
@@ -66,7 +77,7 @@ artifact is not presented as a memory-normalized capacity comparison.
 ## Deliberate limits
 
 This is a focused single-GPU engine, not a vLLM replacement. It has no CUDA
-graphs, fused MLP/RMSNorm/RoPE kernels, prefix caching, speculative decoding,
+graphs, fused MLP/RMSNorm/RoPE kernels, speculative decoding,
 quantization, swap/offload, distributed execution, or instruction-template
 layer. The benchmark is expected to expose those missing optimizations rather
 than conceal them.

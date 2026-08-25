@@ -4,13 +4,14 @@ Build the engine behind an LLM API without owning a GPU.
 
 > **Current release — Ragged L4 Engine:** Qwen2.5-3B, real packed
 > multi-request forwards, decode-first scheduling, chunked prefill,
-> demand-paged KV with recompute preemption, and mixed ragged Triton attention.
+> demand-paged KV with prefix reuse and recompute preemption, and mixed ragged
+> Triton attention.
 > Verified against serial Triton and vLLM on the same NVIDIA L4.
 
 This repository is an educational, from-scratch inference server for a pinned
 `Qwen/Qwen2.5-3B` base model. It implements a flat multi-request transformer
 forward, decode-first token-budget scheduling, chunked prefill, transactional
-demand-paged KV allocation, recompute preemption, mixed ragged Triton attention,
+demand-paged KV allocation, bounded prefix reuse, recompute preemption, mixed ragged Triton attention,
 and authenticated Responses JSON/SSE delivery. Heavy execution runs on one
 serverless NVIDIA L4 through Modal; the local package intentionally has no ML
 runtime dependencies.
@@ -27,9 +28,10 @@ Verified on 2026-08-26:
 - 53/53 dependency-light local tests passed.
 - 53/53 tests plus real FastAPI route/auth integration passed in Modal's CPU image.
 - 34/34 legacy L4 regression checks passed in 208.3 seconds.
-- 16/16 Qwen2.5-3B Ragged L4 checks passed in 63.1 seconds: exact HF tokens,
+- 20/20 Qwen2.5-3B Ragged L4 checks passed in 66.5 seconds: exact HF tokens,
   four request IDs in one transformer invocation, 4,000-token chunked prefill,
-  decode priority, real pressure recomputation, and zero leaked blocks.
+  decode priority, real pressure recomputation, prefix-hit parity/work reduction,
+  and zero leaked request blocks.
 - Ragged Triton matched the Torch oracle at batches 1/2/4/8/16 and contexts
   through 4,002 tokens; worst observed absolute difference was 0.00195. The
   serial Triton kernel also matched at head dimension 128 and context 4,096.
@@ -166,21 +168,23 @@ Evidence for the acceptance gates:
 2. Mixed packed execution matches the sequential oracle token-for-token.
 3. A 4,096-token prompt advances over real prefill chunks without blocking a
    continuously runnable decode for more than one scheduler iteration.
-4. An intentionally undersized KV pool causes non-zero preemptions and
+4. Repeated prompts reuse block-aligned KV prefixes while recomputing the final
+   prompt token, preserving exact first-token and generated-token parity.
+5. An intentionally undersized KV pool causes non-zero preemptions and
    recomputation without OOM, deadlock, token drift, double-free, or leaked blocks.
-5. Torch and Triton ragged attention match over batch sizes `1/2/4/8/16`, block
+6. Torch and Triton ragged attention match over batch sizes `1/2/4/8/16`, block
    boundaries, mixed query lengths, and contexts through 4,096 tokens.
-6. Warm HTTP arrival-rate sweeps report TTFT, ITL, E2E p50/p95/p99, throughput,
+7. Warm HTTP arrival-rate sweeps report TTFT, ITL, E2E p50/p95/p99, throughput,
    SLO goodput, errors, queue depth, preemptions, and raw per-request results.
-7. The same protocol compares the old serial Triton baseline, the new ragged
+8. The same protocol compares the old serial Triton baseline, the new ragged
    engine, and pinned vLLM 0.10.0 on the same L4 and model revision.
 
-Gates 1–5 passed in the 16-check L4 suite. Gate 6 passed in the authenticated
-225-request HTTP sweep retained per request in the three-way artifact. Gate 7 uses
+Gates 1–6 passed in the 20-check L4 suite. Gate 7 passed in the authenticated
+225-request HTTP sweep retained per request in the three-way artifact. Gate 8 uses
 the same workload hash, source identity, 3B revision, L4, active-sequence cap,
 token budget, greedy decoding, and EOS behavior across all implementations.
 
-Prefix caching, KV offload, CUDA graphs, quantization, speculative decoding,
+KV offload, CUDA graphs, quantization, speculative decoding,
 multi-GPU execution, broader APIs, and additional model families remain
 deliberately deferred beyond this packed/demand-paged milestone.
 
@@ -301,9 +305,10 @@ sequences, 2,048 scheduled tokens, temperature zero, and EOS behavior. The raw
 [JSON artifact](artifacts/ragged-vllm-online.json) includes every request and the
 prompt-covering workload hash; it does not include prompt text.
 
-Prefix caching is disabled in vLLM because prompts repeat across arrival-rate
-sweeps and the custom engines do not implement it; otherwise later rates would
-measure cache hits instead of the same inference work.
+Prefix caching is disabled in both vLLM and Ragged for this historical comparison
+because prompts repeat across arrival-rate sweeps; otherwise later rates would
+measure cache hits instead of the same inference work. The deployed Ragged engine
+now enables its separately verified bounded prefix cache.
 
 The custom engines use the configured 4 GiB KV pool. vLLM uses its normal 0.85
 GPU-memory-utilization policy (12.76 GiB KV reported in this environment). The
@@ -557,7 +562,8 @@ Authenticated `/metrics` returns bounded in-memory data:
 - TTFT, inter-token latency, and E2E p50/p95;
 - input/output token counters and 60-second throughput;
 - scheduler iteration and batch-size gauges;
-- cache kind, blocks, utilization, reserved/occupied/fragmentation/gather bytes; and
+- cache kind, request/prefix blocks, prefix hits/misses, utilization,
+  reserved/occupied/fragmentation/gather bytes; and
 - CUDA allocated, reserved, and peak-allocated bytes.
 
 Latency and scheduler samples use fixed-capacity, time-pruned windows; they do not
@@ -633,7 +639,7 @@ docs/                        architecture and one chapter per stage
 The deployed release supports one pinned 3B base-model revision, FP16, a single
 L4, greedy text-only generation, a 4,096-token project context limit, and a
 narrow Responses-style API. It has no sampling, instruction/chat template,
-quantization, prefix cache, cache swapping/offload, CUDA graphs, fused non-
+quantization, cache swapping/offload, CUDA graphs, fused non-
 attention kernels, speculative decoding, tensor parallelism, multi-GPU support,
 persistent metrics, tenant isolation, or user system.
 

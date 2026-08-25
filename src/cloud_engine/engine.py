@@ -210,8 +210,12 @@ class RaggedRunner(RunnerBase):
 
     def admit(self, request: Request) -> None:
         self.cache.reserve(request.request_id, 0)
+        request.tokens_fed = self.cache.restore_prefix(
+            request.request_id, request.prompt_token_ids
+        )
 
     def release(self, request: Request) -> None:
+        self.cache.store_prefix(request.request_id, request.prompt_token_ids)
         self.cache.release(request.request_id)
 
     def allocated_tokens(self, request: Request) -> int:
@@ -510,6 +514,11 @@ class InferenceEngine:
                 kv_cache_bytes=self.config.kv_cache_bytes,
                 dtype=dtype,
                 device=self.device,
+                prefix_cache_max_blocks=(
+                    self.config.prefix_cache_max_blocks
+                    if self.config.mode == "ragged"
+                    else 0
+                ),
             )
             backend_type = (
                 RaggedTritonAttentionBackend

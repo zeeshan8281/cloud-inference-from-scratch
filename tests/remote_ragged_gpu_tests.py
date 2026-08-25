@@ -95,7 +95,7 @@ async def check_model_parity_and_real_packing() -> None:
         )
         record(
             "ragged run leaves no KV blocks",
-            engine.cache.stats().blocks_used == 0,
+            engine.cache.stats().request_blocks_used == 0,
         )
     finally:
         await engine.close()
@@ -292,6 +292,7 @@ async def check_real_pressure_recompute() -> None:
     token_id = tokenizer.encode(" cache", add_special_tokens=False)[0]
     engine = build_engine(
         kv_cache_bytes=5 << 20,
+        prefix_cache_max_blocks=0,
         max_active_sequences=2,
         max_batched_tokens=128,
         prefill_chunk_size=64,
@@ -316,10 +317,55 @@ async def check_real_pressure_recompute() -> None:
         )
         record(
             "pressure recovery drains allocator",
-            engine.cache.stats().blocks_used == 0,
-            f"used={engine.cache.stats().blocks_used}",
+            engine.cache.stats().request_blocks_used == 0,
+            f"used={engine.cache.stats().request_blocks_used}",
         )
         engine.cache.assert_invariants()
+    finally:
+        await engine.close()
+
+
+async def check_prefix_cache_reuse() -> None:
+    from cloud_engine.scheduler import GenerationConfig
+
+    prompt = "Prefix caching avoids repeated prefill work on shared prompts. " * 24
+    engine = build_engine(prefix_cache_max_blocks=64)
+    await engine.start()
+    try:
+        first = await engine.submit(
+            prompt, GenerationConfig(max_output_tokens=8, eos_token_id=None)
+        )
+        first_tokens = (await first.wait()).token_ids
+        first_work = sum(
+            query_length
+            for plan in engine.runner.forward_plans
+            for request_id, _, query_length, _ in plan
+            if request_id == first.request_id
+        )
+
+        second = await engine.submit(
+            prompt, GenerationConfig(max_output_tokens=8, eos_token_id=None)
+        )
+        second_tokens = (await second.wait()).token_ids
+        second_work = sum(
+            query_length
+            for plan in engine.runner.forward_plans
+            for request_id, _, query_length, _ in plan
+            if request_id == second.request_id
+        )
+        stats = engine.cache.stats()
+        record("prefix-cache hit preserves exact tokens", first_tokens == second_tokens)
+        record(
+            "prefix-cache hit skips block-aligned prefill",
+            second_work + engine.config.block_size <= first_work,
+            f"cold_tokens={first_work} warm_tokens={second_work}",
+        )
+        record("prefix-cache hit is measured", stats.prefix_cache_hits >= 1)
+        record(
+            "prefix cache retains no request-owned blocks",
+            stats.request_blocks_used == 0 and stats.prefix_blocks_used > 0,
+            f"request_blocks={stats.request_blocks_used} prefix_blocks={stats.prefix_blocks_used}",
+        )
     finally:
         await engine.close()
 
@@ -332,6 +378,7 @@ def main() -> int:
     check_serial_triton_3b_envelope()
     asyncio.run(check_chunked_prefill_decode_priority())
     asyncio.run(check_real_pressure_recompute())
+    asyncio.run(check_prefix_cache_reuse())
     failed = [(name, detail) for name, ok, detail in RESULTS if not ok]
     elapsed = time.time() - started
     print(

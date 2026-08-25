@@ -100,7 +100,7 @@ async def run_experiment(
         checks = {
             "token_parity": baseline_tokens == experiment_tokens,
             "packed_forward": engine.runner.max_forward_request_count >= 2,
-            "zero_live_kv_blocks": engine.cache.stats().occupied_bytes == 0,
+            "zero_live_kv_blocks": engine.cache.stats().request_blocks_used == 0,
         }
         if not all(checks.values()):
             raise RuntimeError(f"correctness gate failed: {checks}")

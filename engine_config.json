@@ -26,7 +26,8 @@
   },
   "kv_cache": {
     "block_size": 16,
-    "bytes": 4294967296
+    "bytes": 4294967296,
+    "prefix_cache_max_blocks": 256
   },
   "modal": {
     "app_name": "cloud-inference-lab",

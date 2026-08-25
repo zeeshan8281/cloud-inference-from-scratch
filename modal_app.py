@@ -402,7 +402,11 @@ def _run_engine_online(
     _print_run_header(f"online arrival-rate sweep: {mode} L4")
     model_dir = _prepare_weights(RAGGED_MODEL)
     if mode == "ragged":
-        config, engine = _build_engine(mode, model_dir)
+        from cloud_engine.config import build_config
+        from cloud_engine.engine import InferenceEngine
+
+        config = build_config(mode, prefix_cache_max_blocks=0)
+        engine = InferenceEngine(config, model_dir=model_dir)
     else:
         from cloud_engine.config import build_config
         from cloud_engine.engine import InferenceEngine
@@ -477,6 +481,7 @@ def _run_engine_online(
         "max_batched_tokens": config.max_batched_tokens,
         "prefill_chunk_size": config.prefill_chunk_size,
         "kv_cache_bytes": config.kv_cache_bytes,
+        "prefix_cache_max_blocks": config.prefix_cache_max_blocks,
     }
     return result
 

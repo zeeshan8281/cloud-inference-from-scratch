@@ -16,6 +16,7 @@ laptop without Torch (PRD §13.1).
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -46,6 +47,10 @@ class CacheStats:
     occupied_bytes: int = 0
     internal_fragmentation_bytes: int = 0
     temporary_gather_bytes: int = 0
+    request_blocks_used: int = 0
+    prefix_blocks_used: int = 0
+    prefix_cache_hits: int = 0
+    prefix_cache_misses: int = 0
 
     def as_metrics(self) -> dict[str, Any]:
         return {
@@ -57,6 +62,10 @@ class CacheStats:
             "occupied_bytes": self.occupied_bytes,
             "internal_fragmentation_bytes": self.internal_fragmentation_bytes,
             "temporary_gather_bytes": self.temporary_gather_bytes,
+            "request_blocks_used": self.request_blocks_used,
+            "prefix_blocks_used": self.prefix_blocks_used,
+            "prefix_cache_hits": self.prefix_cache_hits,
+            "prefix_cache_misses": self.prefix_cache_misses,
         }
 
 
@@ -244,6 +253,7 @@ class PagedKVCache:
         kv_cache_bytes: int,
         dtype: Any = None,
         device: str = "cuda",
+        prefix_cache_max_blocks: int = 0,
     ) -> None:
         if _torch is None:
             raise RuntimeError("PagedKVCache requires torch")
@@ -266,6 +276,85 @@ class PagedKVCache:
         self._tables: dict[str, list[int]] = {}
         self._length: dict[str, int] = {}
         self.gathered_bytes = 0
+        self.prefix_cache_max_blocks = prefix_cache_max_blocks
+        self._prefixes: OrderedDict[tuple[int, ...], tuple[str, list[int], int]] = (
+            OrderedDict()
+        )
+        self._prefix_counter = 0
+        self.prefix_cache_hits = 0
+        self.prefix_cache_misses = 0
+
+    def _evict_prefixes(self, needed: int, protect: tuple[int, ...] | None = None) -> None:
+        while self._prefixes and self.allocator.free_count < needed:
+            key = next(iter(self._prefixes))
+            if key == protect:
+                self._prefixes.move_to_end(key)
+                if all(candidate == protect for candidate in self._prefixes):
+                    return
+                continue
+            owner, blocks, _ = self._prefixes.pop(key)
+            self.allocator.free(blocks, owner)
+
+    def restore_prefix(self, request_id: str, token_ids: Sequence[int]) -> int:
+        """Copy the longest cached block-aligned prefix into a new request."""
+        if not self.prefix_cache_max_blocks:
+            return 0
+        aligned = ((len(token_ids) - 1) // self.block_size) * self.block_size
+        for length in range(aligned, 0, -self.block_size):
+            key = tuple(token_ids[:length])
+            entry = self._prefixes.get(key)
+            if entry is None:
+                continue
+            _, source_blocks, _ = entry
+            self._evict_prefixes(len(source_blocks), protect=key)
+            if not self.allocator.can_satisfy(len(source_blocks)):
+                break
+            self.ensure_capacity_batch({request_id: length})
+            target_blocks = self._tables[request_id]
+            source = _torch.tensor(source_blocks, dtype=_torch.long, device=self.device)
+            target = _torch.tensor(target_blocks, dtype=_torch.long, device=self.device)
+            self.key_pool.index_copy_(1, target, self.key_pool.index_select(1, source))
+            self.value_pool.index_copy_(1, target, self.value_pool.index_select(1, source))
+            self._length[request_id] = length
+            self._prefixes.move_to_end(key)
+            self.prefix_cache_hits += 1
+            return length
+        if aligned:
+            self.prefix_cache_misses += 1
+        return 0
+
+    def store_prefix(self, request_id: str, token_ids: Sequence[int]) -> int:
+        """Retain a reusable full-block prompt prefix in the physical pool."""
+        if not self.prefix_cache_max_blocks:
+            return 0
+        length = ((len(token_ids) - 1) // self.block_size) * self.block_size
+        blocks_needed = length // self.block_size
+        if not length or blocks_needed > self.prefix_cache_max_blocks:
+            return 0
+        key = tuple(token_ids[:length])
+        if key in self._prefixes:
+            self._prefixes.move_to_end(key)
+            return length
+        if self._length.get(request_id, 0) < length:
+            return 0
+        cached_blocks = sum(len(entry[1]) for entry in self._prefixes.values())
+        while self._prefixes and cached_blocks + blocks_needed > self.prefix_cache_max_blocks:
+            _, (owner, blocks, _) = self._prefixes.popitem(last=False)
+            self.allocator.free(blocks, owner)
+            cached_blocks -= len(blocks)
+        self._evict_prefixes(blocks_needed)
+        if not self.allocator.can_satisfy(blocks_needed):
+            return 0
+        self._prefix_counter += 1
+        owner = f"prefix-{self._prefix_counter}"
+        target_blocks = self.allocator.allocate(owner, blocks_needed)
+        source_blocks = self._tables[request_id][:blocks_needed]
+        source = _torch.tensor(source_blocks, dtype=_torch.long, device=self.device)
+        target = _torch.tensor(target_blocks, dtype=_torch.long, device=self.device)
+        self.key_pool.index_copy_(1, target, self.key_pool.index_select(1, source))
+        self.value_pool.index_copy_(1, target, self.value_pool.index_select(1, source))
+        self._prefixes[key] = (owner, target_blocks, length)
+        return length
 
     # -- admission ----------------------------------------------------------
     def reserve(self, request_id: str, token_capacity: int) -> None:
@@ -288,6 +377,7 @@ class PagedKVCache:
             required_blocks = self.allocator.blocks_for(tokens)
             additions[request_id] = max(0, required_blocks - len(self._tables[request_id]))
         total = sum(additions.values())
+        self._evict_prefixes(total)
         if not self.allocator.can_satisfy(total):
             raise CacheCapacityFull(
                 f"need {total} additional blocks, {self.allocator.free_count} free"
@@ -414,7 +504,12 @@ class PagedKVCache:
         used = self.allocator.used_count
         total = self.allocator.total_blocks
         reserved = used * self.slot_bytes * self.block_size * self.num_layers
-        occupied = sum(self._length.values()) * self.slot_bytes * self.num_layers
+        prefix_blocks = sum(len(entry[1]) for entry in self._prefixes.values())
+        request_blocks = used - prefix_blocks
+        prefix_tokens = sum(entry[2] for entry in self._prefixes.values())
+        occupied = (
+            sum(self._length.values()) + prefix_tokens
+        ) * self.slot_bytes * self.num_layers
         return CacheStats(
             kind=self.kind,
             blocks_total=total,
@@ -424,6 +519,10 @@ class PagedKVCache:
             occupied_bytes=occupied,
             internal_fragmentation_bytes=max(0, reserved - occupied),
             temporary_gather_bytes=self.gathered_bytes,
+            request_blocks_used=request_blocks,
+            prefix_blocks_used=prefix_blocks,
+            prefix_cache_hits=self.prefix_cache_hits,
+            prefix_cache_misses=self.prefix_cache_misses,
         )
 
     def assert_invariants(self) -> None:

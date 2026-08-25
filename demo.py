@@ -158,17 +158,30 @@ def run_demo(base_url: str, prompt: str, max_output_tokens: int) -> None:
         },
         "kv_cache": {
             key: metrics["kv_cache"][key]
-            for key in ("blocks_total", "blocks_used", "utilization")
+            for key in (
+                "blocks_total",
+                "blocks_used",
+                "request_blocks_used",
+                "prefix_blocks_used",
+                "prefix_cache_hits",
+                "prefix_cache_misses",
+                "utilization",
+            )
         },
     }
     assert summary["scheduler"]["max_forward_request_count"] >= 2
+    if blocking["usage"]["input_tokens"] > 16:
+        assert summary["kv_cache"]["prefix_cache_hits"] >= 1
     print(json.dumps(summary, indent=2))
-    print("\nDEMO PASSED: deployed Ragged generation, auth, SSE, and metrics are live.\n")
+    print("\nDEMO PASSED: auth, prefix reuse, packed generation, SSE, and metrics are live.\n")
 
 
 @app.local_entrypoint()
 def main(
-    prompt: str = "Explain how paged KV caching helps an inference engine.",
+    prompt: str = (
+        "Explain how paged KV caching helps an inference engine, including block "
+        "tables, fragmentation, memory reuse, and continuous batching."
+    ),
     max_output_tokens: int = 24,
     url: str = DEFAULT_URL,
 ) -> None:
