@@ -235,12 +235,6 @@ deliberately deferred beyond this packed/demand-paged milestone.
 
 ## Quickstart: correctness on a cloud GPU
 
-For a recording-ready walkthrough of the deployed engine:
-
-```bash
-modal run demo.py
-```
-
 To change scheduling order, capacity-pressure victim selection, or safe batching
 knobs and measure them against the production default, copy the
 [starter experiment](experiments/starter.py) and run:
