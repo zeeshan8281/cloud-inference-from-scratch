@@ -28,14 +28,12 @@ Modal; the local package intentionally has no ML runtime dependencies.
 
 Verified on 2026-08-26:
 
-- 70/70 dependency-light local tests passed; CI repeats them on Python 3.10,
-  3.12, and 3.13 with commit-pinned actions.
-- 70/70 tests plus real FastAPI legacy/multi-tenant auth and authorization
-  integration passed in Modal's CPU image; the source-identified result is
-  committed and checked by the local suite.
-- 34/34 legacy L4 regression checks passed in 208.3 seconds.
-- 20/20 Qwen2.5-3B Ragged L4 checks passed in 66.5 seconds: exact HF tokens,
-  four request IDs in one transformer invocation, 4,000-token chunked prefill,
+- 79 dependency-light tests passed locally; CI repeats them on Python 3.10,
+  3.12, and 3.13, then runs two Redis integration tests against Redis 8.2.1.
+- 80 unit tests plus eight real FastAPI lifecycle checks passed in Modal's CPU
+  image; the source-identified result is committed and checked by the local suite.
+- 20/20 Qwen2.5-3B Ragged L4 checks passed in 69.0 seconds: exact HF tokens,
+  five request IDs in one transformer invocation, 4,000-token chunked prefill,
   decode priority, real pressure recomputation, prefix-hit parity/work reduction,
   and zero leaked request blocks.
 - The identical 20-check suite passed on an NVIDIA A100-SXM4-40GB in 70.1
@@ -206,14 +204,15 @@ Evidence for the acceptance gates:
 1. A traced model invocation contains multiple request IDs; the transformer is
    never executed once per scheduled request.
 2. Mixed packed execution matches the sequential oracle token-for-token.
-3. A 4,096-token prompt advances over real prefill chunks without blocking a
+3. A 4,000-token prompt advances over real prefill chunks without blocking a
    continuously runnable decode for more than one scheduler iteration.
 4. Repeated prompts reuse block-aligned KV prefixes while recomputing the final
    prompt token, preserving exact first-token and generated-token parity.
 5. An intentionally undersized KV pool causes non-zero preemptions and
    recomputation without OOM, deadlock, token drift, double-free, or leaked blocks.
 6. Torch and Triton ragged attention match over batch sizes `1/2/4/8/16`, block
-   boundaries, mixed query lengths, and contexts through 4,096 tokens.
+   boundaries, mixed query lengths, and ragged contexts through 4,002 tokens;
+   serial Triton is separately checked at 4,096 tokens.
 7. Warm HTTP arrival-rate sweeps report TTFT, ITL, E2E p50/p95/p99, throughput,
    SLO goodput, errors, queue depth, preemptions, and raw per-request results.
 8. The same protocol compares the old serial Triton baseline, the new ragged
@@ -269,10 +268,6 @@ paired CUDA-graph evidence.
 These commands refuse to publish an artifact when their workload or report
 validation fails. The reliability runner additionally
 injects deterministic cancellations and rebuilds the engine after timed load.
-
-The script reads the existing API key from the Modal Secret, then demonstrates
-readiness, rejected unauthenticated access, blocking generation, live SSE text,
-ordered events, token usage, and engine metrics without printing the key.
 
 Prerequisites:
 
@@ -359,9 +354,10 @@ same Qwen2.5-0.5B ragged engine with decode graphs disabled and enabled after
 equal warmups. Across three alternating-order trials at concurrency four and 32
 output tokens per request, graph replay preserved exact tokens and improved
 median batch latency from 1,393 ms to 431 ms (3.24x). Runtime metrics recorded
-one graph capture and 99 replays. Graphs are bounded to decode batches
-1/2/4/8/16; other shapes execute eagerly instead of growing graph memory without
-limit.
+one graph capture and 99 replays. That historical artifact exercised the
+batch-four graph. The current release pre-captures decode buckets 1/2/4/8/16
+before readiness and pads other live batch sizes to the next bucket; the online
+artifact records five captures and 640 replays.
 
 ### Quantized capacity mode
 
@@ -404,10 +400,10 @@ because prompts repeat across arrival-rate sweeps; otherwise later rates would
 measure cache hits instead of the same inference work. The deployed Ragged engine
 now enables its separately verified bounded prefix cache.
 
-The custom engines use the configured 4 GiB KV pool. vLLM uses its normal 0.85
-GPU-memory-utilization policy (12.76 GiB KV reported in this environment). The
-workload does not pressure either pool, but this is a throughput/latency
-comparison, not a memory-normalized capacity comparison.
+The custom engines use the configured 4 GiB KV pool. vLLM uses its configured
+0.85 GPU-memory-utilization policy. The workload does not pressure either pool,
+but this is a throughput/latency comparison, not a memory-normalized capacity
+comparison.
 
 vLLM is the performance reference, not a dependency of the custom serving path.
 
@@ -556,7 +552,8 @@ idempotent cancellation, injected decode failure, timeout, and terminal cleanup.
 The Ragged suite additionally covers one real multi-request forward, exact 3B
 HF token parity, transactional growth, 256-token prefill chunks, decode-first
 ordering, recompute preemption under a 5 MiB pool, mixed-query Triton/Torch
-parity through 4,096 tokens, and post-run allocator invariants.
+parity through 4,002 tokens, a separate 4,096-token serial boundary check, and
+post-run allocator invariants.
 
 ## Deploy the API
 
@@ -592,17 +589,17 @@ modal deploy modal_app.py
 The API reserves prompt tokens plus requested maximum output tokens against a
 rolling one-minute tenant budget before admission. Concurrent leases remain held
 through blocking completion or the full SSE lifecycle. Only policies with
-`metrics:true` can read `/metrics`; those snapshots include redacted per-tenant
-usage and never keys.
+`metrics:true` can read `/metrics` and `/metrics/prometheus`; those snapshots
+include redacted per-tenant usage and never keys.
 
 Every terminal request emits a prompt-free `inference_audit` JSON log with tenant,
 request ID, status, and token counts. Modal stores function/container logs with
 [plan-dependent retention](https://modal.com/docs/guide/security) and can export
 them to an external provider through its
 [OpenTelemetry integration](https://modal.com/docs/guide/otel-integration).
-Quotas are process-local and deployment-global because this project deliberately
-caps Modal at one container; move them to a transactional shared store before
-raising `max_containers`.
+Single-replica deployments use the in-process admission gate. When
+`ENGINE_MAX_CONTAINERS>1`, the atomic Redis gate enforces the same quotas across
+replicas and startup fails unless `ADMISSION_REDIS_URL` is configured.
 
 ### Blocking response
 
@@ -681,13 +678,16 @@ invalid JSON, bodies over 64 KiB, and context overflow are rejected. Clients
 cannot select engine mode, model revision, cache size, hardware, or fallback
 behavior.
 
-Expected operational errors include `401 authentication_failed`,
-`400 invalid_request`/`context_length_exceeded`, `429 queue_full`, and
-`503 capacity_exhausted` with `Retry-After: 1`.
+Expected operational errors include `400 invalid_request` or
+`context_length_exceeded`, `401 authentication_failed`, `403 permission_denied`,
+`413 request_too_large`, `429 queue_full` or tenant-limit errors, and
+`503 capacity_exhausted` or `admission_backend_unavailable`. Tenant-limit and
+capacity rejections include `Retry-After`; generation failures return 500.
 
 ## Security model
 
-- The app refuses startup when `ENGINE_API_KEY` is missing.
+- The app refuses startup unless `ENGINE_API_KEY` or a valid
+  `ENGINE_TENANTS_JSON` policy is present.
 - Bearer tokens are compared with `hmac.compare_digest`.
 - Generation and metrics require auth; only readiness is public.
 - FastAPI interactive docs are disabled.
@@ -733,7 +733,7 @@ is replaced and are not a durable observability backend.
 
 ## Cost and local disk footprint
 
-As checked on 2026-08-24, Modal lists L4 compute at `$0.000222/s` (about
+As checked on 2026-08-26, Modal lists L4 compute at `$0.000222/s` (about
 `$0.80/hour`), physical CPU at `$0.0000131/core/s`, memory at
 `$0.00000222/GiB/s`, and Volume storage at `$0.09/GiB/month`; prices and free
 credits can change, so check [Modal pricing](https://modal.com/pricing) before
@@ -743,17 +743,17 @@ retries, tests, and storage are additional.
 
 Cost controls in `engine_config.json`:
 
-- exactly one L4 container maximum;
+- one L4 container by default; Redis-backed deployments can opt into up to four;
 - zero minimum and zero buffer containers;
 - 60-second scale-down window;
 - 20-minute per-call timeout;
 - no schedule and no benchmark-on-deploy; and
 - roughly 6 GB of persistent 3B model data, plus the retained 0.5B oracle.
 
-On the development Mac, the measured working tree was 28 MB including a 27 MB
-virtual environment; the Modal CLI occupied 32 MB. The shared uv cache was 1.5
-GB but belonged to all uv projects. Model weights remain remote. A clean clone
-without a virtual environment is much smaller.
+On the development Mac, the measured working tree was 62 MB including a 53 MB
+virtual environment and 4.0 MB Git directory; tracked files occupied about
+3.9 MB. The Modal CLI occupied 32 MB. The shared uv cache was 1.6 GB across all
+uv projects, not this project alone. Model weights remain remote.
 
 ## Stop compute and delete cloud state
 
@@ -762,7 +762,7 @@ without a virtual environment is much smaller.
 modal app stop cloud-inference-lab
 
 # Inspect before deleting. Deletion removes cached weights and compiled artifacts.
-modal volume get cloud-inference-model-cache
+modal volume ls cloud-inference-model-cache
 modal volume delete cloud-inference-model-cache
 
 # Rotate or remove the bearer secret separately.
@@ -800,11 +800,11 @@ docs/                        architecture and one chapter per stage
 
 The deployed endpoint defaults to one pinned FP16 3B Qwen revision; the separate
 Llama path and opt-in MLP LLM.int8 capacity mode are verified but not selected
-by that endpoint. Serving uses a single L4, greedy text-only generation, a 4,096-token
-project context limit, and a narrow Responses-style API. It has no sampling, instruction/chat template,
-cache swapping/offload, fused non-
-attention kernels, speculative decoding, tensor parallelism, multi-GPU support,
-persistent application metrics or a user-management system.
+by that endpoint. Each replica uses one L4, greedy text-only generation, a
+4,096-token project context limit, and a narrow Responses-style API. It has no
+non-greedy sampling, model-specific chat-template rendering, cache swapping/offload,
+fused non-attention kernels, speculative decoding, tensor parallelism, multi-GPU
+support, persistent application metrics or a user-management system.
 
 It is a real packed inference engine with a bounded production-style envelope,
 not a turnkey fleet-scale production stack.
