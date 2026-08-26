@@ -126,6 +126,11 @@ image = (
         copy=True,
     )
     .add_local_file(
+        Path(__file__).parent / "system-architecture.excalidraw.json",
+        "/root/system-architecture.excalidraw.json",
+        copy=True,
+    )
+    .add_local_file(
         Path(__file__).parent / "engine_config.json",
         "/root/engine_config.json",
         copy=True,
@@ -1236,6 +1241,17 @@ def api_lifecycle_tests() -> str:
         assert models.json()["data"][0]["id"] == MODEL["id"]
         assert client.get("/metrics").status_code == 401
         assert client.get("/metrics", headers={"Authorization": "Bearer test-key"}).status_code == 200
+        preflight = client.options(
+            "/v1/responses",
+            headers={
+                "Origin": "http://127.0.0.1:8765",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+        assert preflight.status_code == 200
+        assert preflight.headers["Access-Control-Allow-Origin"] == "http://127.0.0.1:8765"
+        assert "authorization" in preflight.headers["Access-Control-Allow-Headers"].lower()
         prometheus = client.get(
             "/metrics/prometheus", headers={"Authorization": "Bearer test-key"}
         )
@@ -1277,6 +1293,7 @@ def api_lifecycle_tests() -> str:
                 "model_discovery",
                 "prometheus_metrics",
                 "request_correlation",
+                "local_ui_cors",
                 "tenant_metrics_denied",
                 "malformed_content_length",
             ],

@@ -30,7 +30,7 @@ Verified on 2026-08-26:
 
 - 79 dependency-light tests passed locally; CI repeats them on Python 3.10,
   3.12, and 3.13, then runs two Redis integration tests against Redis 8.2.1.
-- 80 unit tests plus eight real FastAPI lifecycle checks passed in Modal's CPU
+- 81 unit tests plus nine real FastAPI lifecycle checks passed in Modal's CPU
   image; the source-identified result is committed and checked by the local suite.
 - 20/20 Qwen2.5-3B Ragged L4 checks passed in 69.0 seconds: exact HF tokens,
   five request IDs in one transformer invocation, 4,000-token chunked prefill,

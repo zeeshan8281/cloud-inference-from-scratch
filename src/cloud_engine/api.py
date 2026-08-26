@@ -31,6 +31,7 @@ ALLOWED_FIELDS = frozenset(
 )
 MAX_BODY_BYTES = 64 * 1024
 REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+LOCAL_UI_ORIGIN_REGEX = r"^https?://(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?$"
 
 
 class ApiError(Exception):
@@ -597,6 +598,7 @@ def create_app(
     import logging
 
     from fastapi import FastAPI, Request
+    from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 
     log = logger or logging.getLogger("cloud_engine.api")
@@ -615,6 +617,13 @@ def create_app(
     )
 
     app = FastAPI(title="Cloud Inference Engine Lab", docs_url=None, redoc_url=None)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=LOCAL_UI_ORIGIN_REGEX,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        expose_headers=["X-Request-ID"],
+    )
 
     if isinstance(gate, RedisTenantGate):
         @app.on_event("shutdown")

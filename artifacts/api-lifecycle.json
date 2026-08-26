@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "source_revision": "149783d63f79e1ee3d9268dfa7e94010eeab4077+tree-94d1ee6e188b",
+  "source_revision": "5002258aa5f07de066f3db09da808b7dac9596c9+tree-78011281ce9c",
   "passed": true,
-  "unit_tests": 80,
+  "unit_tests": 81,
   "fastapi_checks": [
     "legacy_auth",
     "admin_metrics",
@@ -10,6 +10,7 @@
     "model_discovery",
     "prometheus_metrics",
     "request_correlation",
+    "local_ui_cors",
     "tenant_metrics_denied",
     "malformed_content_length"
   ]

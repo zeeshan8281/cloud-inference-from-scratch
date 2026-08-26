@@ -29,6 +29,7 @@ class TestCommittedEvidence(unittest.TestCase):
                 "model_discovery",
                 "prometheus_metrics",
                 "request_correlation",
+                "local_ui_cors",
                 "tenant_metrics_denied",
                 "malformed_content_length",
             },
