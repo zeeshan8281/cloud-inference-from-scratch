@@ -1,11 +1,15 @@
 {
   "schema_version": 1,
-  "source_revision": "9dd1eac9dce74e4e98b1336174fe79c6ac05938f+tree-51340d7c5869",
+  "source_revision": "149783d63f79e1ee3d9268dfa7e94010eeab4077+tree-94d1ee6e188b",
   "passed": true,
-  "unit_tests": 70,
+  "unit_tests": 80,
   "fastapi_checks": [
     "legacy_auth",
     "admin_metrics",
+    "liveness_readiness",
+    "model_discovery",
+    "prometheus_metrics",
+    "request_correlation",
     "tenant_metrics_denied",
     "malformed_content_length"
   ]

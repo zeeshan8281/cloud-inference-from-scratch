@@ -34,6 +34,23 @@ VOLUME_NAME = MODAL_CFG["volume_name"]
 SECRET_NAME = MODAL_CFG["secret_name"]
 
 
+def _deployed_container_limit() -> int:
+    raw = os.environ.get("ENGINE_MAX_CONTAINERS", str(MODAL_CFG["max_containers"]))
+    try:
+        limit = int(raw)
+    except ValueError as exc:
+        raise ValueError("ENGINE_MAX_CONTAINERS must be an integer") from exc
+    if not 1 <= limit <= MODAL_CFG["distributed_max_containers"]:
+        raise ValueError(
+            f"ENGINE_MAX_CONTAINERS must be between 1 and "
+            f"{MODAL_CFG['distributed_max_containers']}"
+        )
+    return limit
+
+
+DEPLOYED_MAX_CONTAINERS = _deployed_container_limit()
+
+
 def _source_commit() -> str:
     try:
         commit = subprocess.check_output(
@@ -71,6 +88,7 @@ image = (
         f"pydantic=={IMAGE_PINS['pydantic']}",
         f"httpx=={IMAGE_PINS['httpx']}",
         f"uvicorn=={IMAGE_PINS['uvicorn']}",
+        f"redis=={IMAGE_PINS['redis']}",
     )
     .add_local_dir(
         Path(__file__).parent / "src/cloud_engine",
@@ -90,6 +108,16 @@ image = (
     .add_local_dir(
         Path(__file__).parent / "artifacts",
         "/root/artifacts",
+        copy=True,
+    )
+    .add_local_dir(
+        Path(__file__).parent / "ui",
+        "/root/ui",
+        copy=True,
+    )
+    .add_local_file(
+        Path(__file__).parent / "tokens.css",
+        "/root/tokens.css",
         copy=True,
     )
     .add_local_file(
@@ -1029,6 +1057,28 @@ def online_compare(
     print(f"comparison JSON written to {destination}")
 
 
+@app.local_entrypoint()
+def online_ragged(
+    output: str = "artifacts/ragged-vllm-online.json",
+    rates: str = "0.5,1,2,4",
+    duration_seconds: float = 10,
+    slo_ttft_ms: float = 1000,
+    slo_itl_ms: float = 100,
+) -> None:
+    """Rerun only ragged after an engine change, preserving the pinned baseline."""
+    destination = Path(output)
+    result = json.loads(destination.read_text())
+    arrival_rates = [float(value) for value in rates.split(",")]
+    ragged = _run_engine_online.remote(
+        "ragged", arrival_rates, duration_seconds, slo_ttft_ms, slo_itl_ms
+    )
+    if ragged["workload_hash"] != result["vllm"]["workload_hash"]:
+        raise RuntimeError("ragged and vLLM workloads differ")
+    result["ragged"] = ragged
+    destination.write_text(json.dumps(result, indent=2))
+    print(f"ragged comparison JSON updated at {destination}")
+
+
 def _print_benchmark_table(result: dict) -> None:
     meta = result["metadata"]
     print(
@@ -1150,6 +1200,7 @@ def api_lifecycle_tests() -> str:
         cwd="/root",
         capture_output=True,
         text=True,
+        env=os.environ | {"REGENERATING_API_LIFECYCLE": "1"},
     )
     print(completed.stdout)
     print(completed.stderr)
@@ -1167,10 +1218,29 @@ def api_lifecycle_tests() -> str:
         config=SimpleNamespace(mode="test"),
         snapshot_metrics=lambda: {"status": "ok"},
     )
-    with TestClient(create_app(engine, api_key="test-key", model_id=MODEL["id"])) as client:
+    with TestClient(
+        create_app(engine, api_key="test-key", model_id=MODEL["id"], ui_dir="/root/ui")
+    ) as client:
+        assert client.get("/").status_code == 200
+        assert client.get("/ui/styles.css").status_code == 200
+        assert client.get("/livez").json() == {"status": "alive"}
+        assert client.get("/readyz").status_code == 200
         assert client.get("/healthz").status_code == 200
+        assert client.get("/v1/models").status_code == 401
+        models = client.get(
+            "/v1/models",
+            headers={"Authorization": "Bearer test-key", "X-Request-ID": "contract-test"},
+        )
+        assert models.status_code == 200
+        assert models.headers["X-Request-ID"] == "contract-test"
+        assert models.json()["data"][0]["id"] == MODEL["id"]
         assert client.get("/metrics").status_code == 401
         assert client.get("/metrics", headers={"Authorization": "Bearer test-key"}).status_code == 200
+        prometheus = client.get(
+            "/metrics/prometheus", headers={"Authorization": "Bearer test-key"}
+        )
+        assert prometheus.status_code == 200
+        assert "cie_tenant_active" in prometheus.text
         assert client.post("/v1/responses", json={}).status_code == 401
     policies = {
         "admin": TenantPolicy("a" * 32, 2, 4096, True),
@@ -1203,6 +1273,10 @@ def api_lifecycle_tests() -> str:
             "fastapi_checks": [
                 "legacy_auth",
                 "admin_metrics",
+                "liveness_readiness",
+                "model_discovery",
+                "prometheus_metrics",
+                "request_correlation",
                 "tenant_metrics_denied",
                 "malformed_content_length",
             ],
@@ -1218,7 +1292,7 @@ def api_lifecycle_tests() -> str:
     secrets=[modal.Secret.from_name(SECRET_NAME)],
     timeout=MODAL_CFG["timeout_seconds"],
     scaledown_window=MODAL_CFG["scaledown_window_seconds"],
-    max_containers=MODAL_CFG["max_containers"],
+    max_containers=DEPLOYED_MAX_CONTAINERS,
     min_containers=MODAL_CFG["min_containers"],
     buffer_containers=MODAL_CFG["buffer_containers"],
 )
@@ -1232,10 +1306,16 @@ class ApiServer:
     async def load(self) -> None:
         self.api_key = os.environ.get("ENGINE_API_KEY")
         tenant_json = os.environ.get("ENGINE_TENANTS_JSON")
+        admission_redis_url = os.environ.get("ADMISSION_REDIS_URL")
         if not self.api_key and not tenant_json:
             raise RuntimeError(
                 f"missing ENGINE_API_KEY or ENGINE_TENANTS_JSON in secret "
                 f"{SECRET_NAME!r}; refusing to start (fail closed)"
+            )
+        if DEPLOYED_MAX_CONTAINERS > 1 and not admission_redis_url:
+            raise RuntimeError(
+                "ADMISSION_REDIS_URL is required when ENGINE_MAX_CONTAINERS > 1; "
+                "refusing unsafe process-local admission"
             )
         model_dir = _prepare_weights(RAGGED_MODEL)
         config, self.engine = _build_engine(self.deployed_mode, model_dir)
@@ -1249,6 +1329,8 @@ class ApiServer:
             api_key=self.api_key,
             model_id=config.model_id,
             tenant_policies=policies,
+            ui_dir="/root/ui",
+            admission_redis_url=admission_redis_url,
         )
 
     @modal.exit()

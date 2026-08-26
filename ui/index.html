@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="description" content="Operator console for the from-scratch cloud inference engine.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/ui/styles.css">
+    <title>CIE / Operator</title>
+  </head>
+  <body>
+    <header class="nav">
+      <a class="wordmark" href="/" aria-label="Cloud Inference Engine home">cie<span>/operator</span></a>
+      <div class="nav__status" id="health" data-state="idle" aria-live="polite">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="health-label">not checked</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <p class="kicker">L4 · RAGGED ENGINE · FP16</p>
+          <h1 id="page-title">Run the engine.<br>Read the evidence.</h1>
+        </div>
+        <p class="intro__lede">A thin control surface over the replicated Responses API: streamed tokens, client-observed latency, and the committed L4 benchmark beside the run.</p>
+      </section>
+
+      <section class="workbench" aria-label="Inference workbench">
+        <form class="composer" id="run-form" novalidate>
+          <div class="section-heading">
+            <div>
+              <h2>Request</h2>
+              <p>Credentials stay in this browser tab.</p>
+            </div>
+          </div>
+
+          <div class="connection-grid">
+            <label class="field field--wide">
+              <span>Endpoint</span>
+              <input id="endpoint" name="endpoint" type="url" inputmode="url" autocomplete="url" placeholder="https://…modal.run" aria-describedby="endpoint-help" required>
+              <small id="endpoint-help">Use the deployed Modal URL; leave as this origin when served by the engine.</small>
+            </label>
+            <label class="field field--wide">
+              <span>Bearer key</span>
+              <input id="api-key" name="apiKey" type="password" autocomplete="off" placeholder="••••••••••••••••" aria-describedby="key-help" required>
+              <small id="key-help">Held in sessionStorage; cleared when the tab closes.</small>
+            </label>
+          </div>
+
+          <label class="field">
+            <span>Model</span>
+            <input id="model" name="model" value="Qwen/Qwen2.5-3B" autocomplete="off" required>
+            <small>Must match the server-fixed deployed model.</small>
+          </label>
+
+          <label class="field field--prompt">
+            <span>Prompt</span>
+            <textarea id="prompt" name="prompt" rows="8" maxlength="32000" required>Explain how paged KV caching reduces memory fragmentation in two concise paragraphs.</textarea>
+            <small><span id="prompt-count">0</span> characters · run with ⌘/Ctrl + Enter</small>
+          </label>
+
+          <div class="request-options">
+            <label class="field field--compact">
+              <span>Max tokens</span>
+              <input id="max-tokens" name="maxTokens" type="number" min="1" max="256" step="1" value="96" required>
+              <small>1–256</small>
+            </label>
+            <label class="check-field">
+              <input id="stream" name="stream" type="checkbox" checked>
+              <span>Stream SSE</span>
+            </label>
+          </div>
+
+          <div class="form-error" id="form-error" role="alert" hidden></div>
+          <div class="actions">
+            <button class="button button--primary" id="run-button" type="submit" data-state="idle">
+              <span class="button__idle">Run inference</span>
+              <span class="button__loading">Generating…</span>
+            </button>
+            <button class="button button--quiet" id="stop-button" type="button" disabled>Stop</button>
+          </div>
+        </form>
+
+        <section class="result" aria-labelledby="result-title">
+          <div class="section-heading">
+            <div>
+              <h2 id="result-title">Response</h2>
+              <p id="run-state" aria-live="polite">Waiting for a request.</p>
+            </div>
+          </div>
+
+          <div class="output-shell" id="output-shell" data-state="empty">
+            <div class="output-empty" id="output-empty">
+              <span aria-hidden="true">⌁</span>
+              <p>The streamed response will appear here.</p>
+              <button class="text-action" id="focus-prompt" type="button">Write a prompt</button>
+            </div>
+            <pre id="output" aria-live="polite" aria-atomic="false"></pre>
+          </div>
+
+          <dl class="live-metrics" aria-label="Current request metrics">
+            <div><dt>TTFT</dt><dd id="metric-ttft">—</dd></div>
+            <div><dt>Elapsed</dt><dd id="metric-elapsed">—</dd></div>
+            <div><dt>Output</dt><dd id="metric-tokens">—</dd></div>
+            <div><dt>Rate</dt><dd id="metric-rate">—</dd></div>
+          </dl>
+        </section>
+      </section>
+
+      <section class="evidence" aria-labelledby="evidence-title">
+        <div class="section-heading evidence__heading">
+          <div>
+            <h2 id="evidence-title">Committed L4 evidence</h2>
+            <p>Fixed-interval load at 4 requests/second · 40 offered · Qwen2.5-3B.</p>
+          </div>
+        </div>
+
+        <div class="pipeline" aria-label="Inference pipeline">
+          <span>1–4 API replicas</span><i aria-hidden="true">→</i>
+          <span>Redis Lua admission</span><i aria-hidden="true">→</i>
+          <span>Continuous scheduler</span><i aria-hidden="true">→</i>
+          <span>Paged KV · 4 GiB</span><i aria-hidden="true">→</i>
+          <span>CUDA Graphs · 1/2/4/8/16</span><i aria-hidden="true">→</i>
+          <span>Ragged Triton</span>
+        </div>
+
+        <div class="benchmark-table" role="table" aria-label="Benchmark comparison">
+          <div class="benchmark-row benchmark-row--head" role="row">
+            <span role="columnheader">Implementation</span><span role="columnheader">Output tok/s</span><span role="columnheader">p99 TTFT</span><span role="columnheader">p99 ITL</span><span role="columnheader">Completed</span>
+          </div>
+          <div class="benchmark-row" role="row">
+            <strong role="cell" data-label="Implementation">This engine</strong><span role="cell" data-label="Output tok/s">51.104</span><span role="cell" data-label="p99 TTFT">138.698 ms</span><span role="cell" data-label="p99 ITL">79.969 ms</span><span role="cell" data-label="Completed">40 / 40</span>
+          </div>
+          <div class="benchmark-row benchmark-row--control" role="row">
+            <strong role="cell" data-label="Implementation">vLLM control</strong><span role="cell" data-label="Output tok/s">53.396</span><span role="cell" data-label="p99 TTFT">79.754 ms</span><span role="cell" data-label="p99 ITL">35.949 ms</span><span role="cell" data-label="Completed">40 / 40</span>
+          </div>
+        </div>
+        <p class="evidence__note">At 4 req/s, the custom runtime delivered 95.7% of vLLM output throughput. Source: <a href="https://github.com/zeeshan8281/cloud-inference-from-scratch/blob/main/artifacts/ragged-vllm-online.json">artifacts/ragged-vllm-online.json</a>.</p>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>Cloud Inference Engine Lab</span>
+      <span>From-scratch runtime · Modal L4</span>
+      <a href="https://github.com/zeeshan8281/cloud-inference-from-scratch">Source ↗</a>
+    </footer>
+    <script src="/ui/app.js" defer></script>
+  </body>
+</html>

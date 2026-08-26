@@ -78,6 +78,7 @@ async def check_model_parity_and_real_packing() -> None:
         "Name three GPU memory levels.",
         "What is continuous batching?",
         "Define a page table briefly.",
+        "Why does CUDA Graph replay reduce launch overhead?",
     ]
     expected = reference_tokens(prompts, 8)
     engine = build_engine()
@@ -96,7 +97,7 @@ async def check_model_parity_and_real_packing() -> None:
         record("Qwen2.5-3B ragged tokens equal HF oracle", got == expected)
         record(
             "one transformer invocation contains multiple request IDs",
-            max_requests >= 4,
+            max_requests >= 5,
             f"max_request_ids={max_requests}",
         )
         record(

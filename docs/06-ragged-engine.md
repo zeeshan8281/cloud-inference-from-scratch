@@ -32,6 +32,12 @@ The model is invoked once with that object. Every transformer layer consumes
 the same ragged metadata, writes K/V through the slot mapping, and launches the
 mixed prefill/decode Triton attention kernel.
 
+Decode batches use pre-captured CUDA Graph buckets at sizes 1/2/4/8/16. A live
+batch is padded to the next bucket with duplicate scratch rows, then only its
+real logits are sampled. All buckets are captured before readiness and share a
+private graph memory pool, eliminating capture stalls from measured traffic
+without allowing graph memory to grow with arbitrary batch shapes.
+
 ## Transactional demand paging
 
 Requests own empty page tables at admission. Before a packed forward, the cache
@@ -76,9 +82,10 @@ artifact is not presented as a memory-normalized capacity comparison.
 
 ## Deliberate limits
 
-This is a focused single-GPU engine, not a vLLM replacement. The default FP16
-path has bounded decode CUDA graphs; an opt-in, eager MLP LLM.int8 capacity mode
-is measured separately. It still has no fused MLP/RMSNorm/RoPE kernels,
-speculative decoding, swap/offload, distributed execution, or
-instruction-template layer. The benchmarks expose those limits rather than
-conceal them.
+This is a focused single-GPU-per-worker engine, not a vLLM replacement. The
+default FP16 path has bounded decode CUDA graphs; an opt-in, eager MLP LLM.int8
+capacity mode is measured separately. Redis coordinates tenant admission across
+up to four API replicas, but there is no tensor/pipeline parallel execution.
+The engine also has no fused MLP/RMSNorm/RoPE kernels, speculative decoding,
+swap/offload, or instruction-template layer. The benchmarks expose those limits
+rather than conceal them.

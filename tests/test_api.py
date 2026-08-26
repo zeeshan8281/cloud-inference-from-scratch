@@ -8,12 +8,14 @@ import unittest
 
 from cloud_engine.api import (
     ApiError,
+    RedisTenantGate,
     TenantGate,
     TenantPolicy,
     authenticate,
     authorized,
     build_response_object,
     parse_tenant_policies,
+    prometheus_text,
     response_event_sequence,
     validate_payload,
 )
@@ -179,6 +181,64 @@ class TestTenantGate(unittest.IsolatedAsyncioTestCase):
         await replacement.release()
 
 
+class _FakeRedis:
+    def __init__(self, replies):
+        self.replies = iter(replies)
+        self.calls = []
+        self.closed = False
+
+    async def eval(self, *args):
+        self.calls.append(args)
+        reply = next(self.replies)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    async def aclose(self):
+        self.closed = True
+
+
+class TestRedisTenantGate(unittest.IsolatedAsyncioTestCase):
+    async def test_atomic_acquire_release_and_snapshot(self) -> None:
+        client = _FakeRedis([[1, 0, 1, 128], 1, [0, 128]])
+        gate = RedisTenantGate(
+            client,
+            {"alpha": TenantPolicy("a" * 32, 2, 4096)},
+            clock=lambda: 100.0,
+        )
+        lease = await gate.acquire("alpha", 128)
+        await lease.release()
+        snapshot = await gate.snapshot()
+        self.assertEqual(snapshot["alpha"]["reserved_tokens_60s"], 128)
+        acquire_call = client.calls[0]
+        self.assertEqual(acquire_call[1], 3)
+        self.assertTrue(all("{alpha}" in key for key in acquire_call[2:5]))
+        await gate.close()
+        self.assertTrue(client.closed)
+
+    async def test_backend_failure_is_fail_closed(self) -> None:
+        gate = RedisTenantGate(
+            _FakeRedis([OSError("offline")]),
+            {"alpha": TenantPolicy("a" * 32, 1, 256)},
+        )
+        with self.assertRaisesRegex(ApiError, "backend unavailable") as caught:
+            await gate.acquire("alpha", 1)
+        self.assertEqual(caught.exception.status, 503)
+        self.assertEqual(caught.exception.code, "admission_backend_unavailable")
+
+    async def test_distributed_limits_map_to_api_errors(self) -> None:
+        gate = RedisTenantGate(
+            _FakeRedis([[0, 1, 1, 0], [0, 2, 0, 256]]),
+            {"alpha": TenantPolicy("a" * 32, 1, 256)},
+        )
+        with self.assertRaises(ApiError) as concurrency:
+            await gate.acquire("alpha", 1)
+        self.assertEqual(concurrency.exception.code, "tenant_concurrency_limit")
+        with self.assertRaises(ApiError) as rate:
+            await gate.acquire("alpha", 1)
+        self.assertEqual(rate.exception.code, "tenant_token_rate_limit")
+
+
 class TestResponseObjectShape(unittest.TestCase):
     def test_matches_prd_schema(self) -> None:
         payload = build_response_object(
@@ -202,6 +262,22 @@ class TestResponseObjectShape(unittest.TestCase):
         self.assertEqual(content["annotations"], [])
         usage = payload["usage"]
         self.assertEqual(usage["total_tokens"], 8)
+
+
+class TestPrometheusExport(unittest.TestCase):
+    def test_nested_metrics_and_tenant_labels(self) -> None:
+        rendered = prometheus_text(
+            {
+                "requests": {"completed_total": 3},
+                "latency_ms": {"ttft_p95": 12.5},
+                "tenants": {"alpha": {"active": 1, "tokens_per_minute": 4096}},
+                "ignored": "text",
+            }
+        )
+        self.assertIn("cie_requests_completed_total 3", rendered)
+        self.assertIn("cie_latency_ms_ttft_p95 12.5", rendered)
+        self.assertIn('cie_tenant_active{tenant="alpha"} 1', rendered)
+        self.assertNotIn("ignored", rendered)
 
 
 class TestStreamingEventSequence(unittest.IsolatedAsyncioTestCase):

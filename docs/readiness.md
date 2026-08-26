@@ -17,7 +17,9 @@ multi-release operating history; a repository cannot manufacture that evidence.
 
 Current evidence satisfies correctness, the core runtime, baseline operations,
 standardized load measurement, and a 1,936-request cancellation/restart soak on
-one pinned Qwen model and one L4. Bounded prefix reuse has L4 parity and
+one pinned Qwen model and one L4. At 4 req/s, pre-captured CUDA Graph buckets
+delivered 51.1 output tok/s (95.7% of pinned vLLM), 138.7 ms p99 TTFT, 80.0 ms
+p99 ITL, zero errors, and 3.65 SLO-good req/s. Bounded prefix reuse has L4 parity and
 work-reduction evidence, the same 20-check suite passes on A100, and exact packed
 oracle parity passes on both Qwen2 and Llama-family checkpoints.
 CUDA graph decode has exact-token and 3.24x paired L4 evidence. A candidate
@@ -30,8 +32,11 @@ of 16, and 2.31x latency. Its eager-only execution and generated-token drift are
 reported as capacity-mode trade-offs, not hidden. Secret-backed tenant policies enforce
 per-tenant concurrency, rolling token budgets, and admin-only metrics; prompt-free
 structured audit logs survive container teardown under Modal's plan retention
-and can be exported through its OpenTelemetry integration. Every gate above now
-passes for the declared single-GPU, greedy text-generation envelope, earning
+and can be exported through its OpenTelemetry integration. Multi-replica API
+admission uses one atomic Redis Lua transaction, fails closed on backend loss,
+and passed races across eight independent clients; deployments above one replica
+are rejected unless that shared gate is configured. Every gate above now passes
+for the declared replicated-API/single-GPU-worker, greedy text-generation envelope, earning
 9/10; the tenth point still requires sustained independent adoption and
 multi-release operating history.
 
@@ -45,11 +50,13 @@ multi-release operating history.
 - Commit-pinned CI across every supported Python minor line, including evidence
   hash and acceptance-threshold checks.
 
-The demo, NVIDIA AIPerf runner, and GPU profiler are working. Experiments can
+The zero-dependency `cie` CLI, browser operator console, one-command demo,
+NVIDIA AIPerf runner, and GPU profiler are working. Experiments can
 change scheduling order, preemption victim selection, active-sequence limits,
 batch token budgets, and prefill chunk size; they emit raw and compact artifacts
 only after correctness gates pass. Pinned Qwen2 and Llama-family examples both
-have machine-readable exact-oracle GPU evidence. Every gate above now passes for
+have machine-readable exact-oracle GPU evidence. CI runs the contract and
+artifact gates on Python 3.10/3.12/3.13 plus a real Redis service gate. Every gate above now passes for
 the declared greedy, text-only, single-GPU envelope, earning 9/10; the final
 point requires independent adoption and multi-release history.
 
@@ -62,9 +69,12 @@ point requires independent adoption and multi-release history.
 - Reproducible execution on a second NVIDIA target; DGX Spark is preferred but
   must not be claimed without GB10 evidence.
 
-All five gates pass: the complete 20-check suite passed on both L4 (Ada) and
-A100-SXM4-40GB (Ampere), with the A100 result committed as a source-identified
-machine-readable artifact. This earns 9/10 for the declared NVIDIA cloud-GPU
-workbench envelope. DGX Spark remains a documented, unverified ARM64/GB10 target;
-claiming DGX support still requires correctness, AIPerf, and profiling evidence
-from that device.
+All five gates pass: the current complete 20-check suite passes on L4 (Ada), an
+earlier source-identified run passed the same suite on A100-SXM4-40GB (Ampere),
+and the current online artifact records same-model/same-L4 raw requests against
+vLLM 0.10.0. Ragged reaches 95.7% of vLLM output throughput at 4 req/s while
+meeting the declared TTFT/ITL SLOs. The A100 result is committed as a
+source-identified machine-readable artifact. This earns 9/10 for the declared
+NVIDIA cloud-GPU workbench envelope. DGX Spark remains a documented, unverified
+ARM64/GB10 target; claiming DGX support still requires correctness, AIPerf, and
+profiling evidence from that device.

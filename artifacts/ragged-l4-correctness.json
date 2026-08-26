@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_revision": "9b8450e03fe2f67fc3c210820ceedb33acc3fcac+tree-4e31ae3a3fc8",
+  "source_revision": "149783d63f79e1ee3d9268dfa7e94010eeab4077+tree-5d4022c7288a",
   "model": "Qwen/Qwen2.5-3B",
   "model_revision": "3aab1f1954e9cc14eb9509a215f9e5ca08227a9b",
   "gpu": "NVIDIA L4",
@@ -9,7 +9,7 @@
     9
   ],
   "total_memory_bytes": 23659151360,
-  "elapsed_seconds": 70.69,
+  "elapsed_seconds": 69.029,
   "passed": 20,
   "failed": 0,
   "checks": [
@@ -21,7 +21,7 @@
     {
       "name": "one transformer invocation contains multiple request IDs",
       "passed": true,
-      "detail": "max_request_ids=4"
+      "detail": "max_request_ids=5"
     },
     {
       "name": "ragged run leaves no KV blocks",

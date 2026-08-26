@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import unittest
 import zipfile
 from pathlib import Path
@@ -11,6 +12,10 @@ ARTIFACTS = ROOT / "artifacts"
 
 
 class TestCommittedEvidence(unittest.TestCase):
+    @unittest.skipIf(
+        os.environ.get("REGENERATING_API_LIFECYCLE") == "1",
+        "the lifecycle job is regenerating this artifact",
+    )
     def test_api_lifecycle_gate(self) -> None:
         result = json.loads((ARTIFACTS / "api-lifecycle.json").read_text())
         self.assertTrue(result["passed"])
@@ -20,6 +25,10 @@ class TestCommittedEvidence(unittest.TestCase):
             {
                 "legacy_auth",
                 "admin_metrics",
+                "liveness_readiness",
+                "model_discovery",
+                "prometheus_metrics",
+                "request_correlation",
                 "tenant_metrics_denied",
                 "malformed_content_length",
             },
@@ -134,6 +143,33 @@ class TestCommittedEvidence(unittest.TestCase):
         self.assertGreaterEqual(result["soak"]["issued"], 1_900)
         self.assertEqual(result["soak"]["failed"], 0)
         self.assertTrue(result["restart"]["passed"])
+
+    def test_online_ragged_release_gate(self) -> None:
+        result = json.loads((ARTIFACTS / "ragged-vllm-online.json").read_text())
+        self.assertEqual(result["ragged"]["workload_hash"], result["vllm"]["workload_hash"])
+        release = result["ragged"]["sweeps"][-1]
+        self.assertEqual(release["requests"]["offered"], 40)
+        self.assertEqual(release["requests"]["completed"], 40)
+        self.assertEqual(release["requests"]["errors"], 0)
+        self.assertLessEqual(release["latency"]["ttft_p99_ms"], 1000)
+        self.assertLessEqual(release["latency"]["itl_p99_ms"], 100)
+        self.assertGreaterEqual(release["throughput"]["output_tokens_per_second"], 45)
+        self.assertGreaterEqual(
+            release["throughput"]["slo_goodput_requests_per_second"], 3.2
+        )
+        baseline = result["vllm"]["sweeps"][-1]
+        self.assertGreaterEqual(
+            release["throughput"]["output_tokens_per_second"],
+            baseline["throughput"]["output_tokens_per_second"] * 0.9,
+        )
+        self.assertLessEqual(
+            release["latency"]["ttft_p99_ms"], baseline["latency"]["ttft_p99_ms"] * 2
+        )
+        self.assertLessEqual(
+            release["latency"]["e2e_p99_ms"], baseline["latency"]["e2e_p99_ms"] * 2
+        )
+        self.assertEqual(release["scheduler"]["cuda_graph_captures"], 5)
+        self.assertGreaterEqual(release["scheduler"]["cuda_graph_replays"], 600)
 
 
 if __name__ == "__main__":

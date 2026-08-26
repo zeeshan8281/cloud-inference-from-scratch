@@ -46,6 +46,7 @@
     "timeout_seconds": 1200,
     "scaledown_window_seconds": 60,
     "max_containers": 1,
+    "distributed_max_containers": 4,
     "min_containers": 0,
     "buffer_containers": 0,
     "max_inputs_per_container": 32
@@ -62,7 +63,8 @@
     "starlette": "0.46.2",
     "pydantic": "2.11.5",
     "httpx": "0.28.1",
-    "uvicorn": "0.34.2"
+    "uvicorn": "0.34.2",
+    "redis": "8.1.0"
   },
   "compatibility_candidate": {
     "torch": "2.13.0",

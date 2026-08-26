@@ -15,8 +15,11 @@ urls = { Repository = "https://github.com/zeeshan8281/cloud-inference-from-scrat
 # Torch/Triton/FastAPI live only inside the Modal image defined in modal_app.py.
 dependencies = []
 
+[project.scripts]
+cie = "cloud_engine.cli:main"
+
 [project.optional-dependencies]
-dev = ["ruff>=0.6"]
+dev = ["redis==8.1.0", "ruff>=0.6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

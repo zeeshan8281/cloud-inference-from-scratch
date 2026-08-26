@@ -60,7 +60,10 @@ Verified on 2026-08-26:
   identity and acceptance thresholds.
 - A three-way warm HTTP sweep completed 225/225 raw requests without error on
   the same pinned 3B revision and workload hash for serial Triton, Ragged, and
-  vLLM 0.10.0.
+  vLLM 0.10.0. At 4 req/s the current Ragged path reached 51.1 output tok/s
+  (95.7% of vLLM), 138.7 ms p99 TTFT, and 80.0 ms p99 ITL. Power-of-two CUDA
+  Graph buckets are captured before readiness, so live batch sizes 1–16 do not
+  pay graph-capture stalls.
 - The deployed Ragged API passed public readiness, unauthenticated rejection,
   authenticated blocking generation, ordered SSE with token usage, and
   authenticated metrics checks against the external production URL.
@@ -71,9 +74,12 @@ Verified on 2026-08-26:
 - A 120-second, concurrency-eight L4 reliability soak completed 1,936 requests:
   1,760 generated, 176 deliberately cancelled, zero failed, zero leaked request
   blocks, 1,752 prefix hits, packed batches of eight, and a clean engine restart.
+- The zero-dependency `cie` CLI covers health, model discovery, generation, and
+  metrics. Redis-backed Lua admission was race-tested across eight independent
+  clients; CI repeats the real Redis gate in addition to Python 3.10/3.12/3.13.
 
-Evidence-backed readiness for the declared single-GPU, greedy text-generation
-envelope: **production inference engine 9/10, general inference devtool 9/10,
+Evidence-backed readiness for the declared replicated-API/single-GPU-worker,
+greedy text-generation envelope: **production inference engine 9/10, general inference devtool 9/10,
 and NVIDIA cloud-GPU experimentation workbench 9/10**. The exact gates and the
 unearned tenth point are documented in [readiness](docs/readiness.md).
 
@@ -93,7 +99,10 @@ correctness oracle in smoke and remote GPU tests.
 client
   |
   v
-FastAPI auth + strict validation
+FastAPI request ID + auth + strict validation
+  |
+  +-- one replica: process-local tenant gate
+  +-- 2–4 replicas: atomic Redis Lua tenant gate
   |
   v
 InferenceEngine.submit
@@ -109,7 +118,7 @@ custom Qwen2 forward
   +-- batched:    iteration-level multi-request scheduling
   +-- paged:      shared block pool + torch logical gather
   +-- triton:     shared block pool + direct-block decode kernel
-  +-- ragged:     BatchPlan -> PackedBatch -> one mixed Triton forward
+  +-- ragged:     BatchPlan -> power-of-two CUDA Graph -> one mixed Triton forward
 ```
 
 `InferenceEngine` is the composition root. The scheduler alone owns request
@@ -410,23 +419,23 @@ vLLM is the performance reference, not a dependency of the custom serving path.
 
 | Arrival | Engine | TTFT p99 | ITL p99 | E2E p99 | Output tok/s | SLO goodput | Errors | Queue max |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|
-| 0.5 req/s | serial Triton | 83.6 ms | 65.7 ms | 1,900.9 ms | 13.6 | 0.618 req/s | 0 | 0 |
-|  | Ragged | 63.4 ms | 54.3 ms | 1,928.9 ms | 13.6 | 0.495 req/s | 0 | 1 |
-|  | vLLM 0.10.0 | 100.3 ms | 30.2 ms | 920.9 ms | 13.7 | 0.621 req/s | 0 | n/a |
-| 1 req/s | serial Triton | 255.4 ms | 313.5 ms | 7,109.2 ms | 16.6 | 0.208 req/s | 0 | 1 |
-|  | Ragged | 108.0 ms | 60.7 ms | 1,779.9 ms | 22.3 | 0.933 req/s | 0 | 1 |
-|  | vLLM 0.10.0 | 73.1 ms | 30.0 ms | 918.7 ms | 24.1 | 1.010 req/s | 0 | n/a |
-| 2 req/s | serial Triton | 531.8 ms | 754.8 ms | 14,025.6 ms | 16.7 | 0.538 req/s | 0 | 1 |
-|  | Ragged | 127.7 ms | 63.6 ms | 1,859.2 ms | 32.4 | 2.086 req/s | 0 | 1 |
-|  | vLLM 0.10.0 | 72.2 ms | 34.0 ms | 940.4 ms | 32.6 | 2.095 req/s | 0 | n/a |
-| 4 req/s | serial Triton | 13,231.2 ms | 1,163.6 ms | 27,083.3 ms | 16.7 | 0.624 req/s | 0 | 3 |
-|  | Ragged | 592.6 ms | 87.2 ms | 2,450.0 ms | 49.3 | 3.432 req/s | 0 | 2 |
-|  | vLLM 0.10.0 | 72.1 ms | 36.0 ms | 979.3 ms | 53.5 | 3.825 req/s | 0 | n/a |
+| 0.5 req/s | serial Triton | 145.7 ms | 174.7 ms | 3,366.0 ms | 12.1 | 0.110 req/s | 0 | 1 |
+|  | Ragged | 189.4 ms | 46.5 ms | 1,345.4 ms | 13.4 | 0.610 req/s | 0 | 1 |
+|  | vLLM 0.10.0 | 104.2 ms | 29.8 ms | 941.8 ms | 13.7 | 0.621 req/s | 0 | n/a |
+| 1 req/s | serial Triton | 311.6 ms | 447.6 ms | 10,468.4 ms | 13.7 | 0.172 req/s | 0 | 1 |
+|  | Ragged | 112.2 ms | 65.3 ms | 1,404.1 ms | 23.1 | 0.965 req/s | 0 | 1 |
+|  | vLLM 0.10.0 | 68.7 ms | 29.6 ms | 931.9 ms | 24.1 | 1.007 req/s | 0 | n/a |
+| 2 req/s | serial Triton | 704.0 ms | 881.4 ms | 17,951.3 ms | 13.7 | 0.442 req/s | 0 | 2 |
+|  | Ragged | 147.7 ms | 70.3 ms | 1,476.5 ms | 32.5 | 1.983 req/s | 0 | 1 |
+|  | vLLM 0.10.0 | 79.8 ms | 34.3 ms | 979.5 ms | 32.6 | 2.094 req/s | 0 | n/a |
+| 4 req/s | serial Triton | 18,952.0 ms | 1,316.5 ms | 34,427.9 ms | 13.7 | 0.515 req/s | 0 | 4 |
+|  | Ragged | 138.7 ms | 80.0 ms | 1,637.3 ms | 51.1 | 3.650 req/s | 0 | 1 |
+|  | vLLM 0.10.0 | 79.7 ms | 35.9 ms | 1,024.3 ms | 53.4 | 3.814 req/s | 0 | n/a |
 
-At 4 req/s, Ragged delivered **2.96×** the serial engine's output throughput
-and **92.0%** of vLLM's while keeping TTFT and ITL p99 inside the stated SLO.
-Its p99 TTFT was still 8.2× vLLM and p99 E2E was 2.5× vLLM, so the result proves
-real packed scheduling—not production parity. All 225 measured requests
+At 4 req/s, Ragged delivered **3.72×** the serial engine's output throughput
+and **95.7%** of vLLM's while keeping TTFT and ITL p99 inside the stated SLO.
+Its p99 TTFT was 1.74× vLLM and p99 E2E was 1.60× vLLM, so the result proves
+competitive single-GPU throughput with explicit remaining tail-latency headroom. All 225 measured requests
 completed without error. The 4 GiB online pool did not preempt; non-zero
 preemption and recomputation are proven separately by the 5 MiB pressure test.
 vLLM queue depth is `n/a` because its HTTP API did not expose an equivalent
@@ -514,6 +523,12 @@ modal run modal_app.py::benchmark --mode paged --profile fragmentation --output 
 uv sync --extra dev
 uv run python -m unittest discover -s tests -p 'test_*.py' -v
 uv run ruff check .
+
+# Zero-dependency deployed-engine client installed with the package.
+cie --url "$ENGINE_URL" health
+cie --url "$ENGINE_URL" --api-key "$ENGINE_API_KEY" models
+cie --url "$ENGINE_URL" --api-key "$ENGINE_API_KEY" generate \
+  "Explain continuous batching in two sentences."
 
 # Same suite plus real FastAPI auth/tenant construction in the Modal CPU image.
 modal run -w artifacts/api-lifecycle.json modal_app.py::api_lifecycle_tests
@@ -635,6 +650,19 @@ response.completed
 data: [DONE]
 ```
 
+### Operator console
+
+Open the deployed Web Function URL in a browser for the monochrome operator
+console. It uses the same authenticated `/v1/responses` route, streams SSE
+deltas, measures client-observed TTFT/throughput, and keeps the bearer key only
+in the current browser tab. For a static local preview (inference still needs a
+deployed endpoint):
+
+```bash
+python3 -m http.server 8000
+# Open http://localhost:8000/ui/
+```
+
 Concatenated deltas equal both `response.output_text.done.text` and the final
 response text. The completed event contains input, output, and total token usage.
 
@@ -642,8 +670,12 @@ response text. The completed event contains input, output, and total token usage
 
 | Endpoint | Auth | Behavior |
 |---|---|---|
+| `GET /livez` | Public | process liveness; never claims model readiness |
+| `GET /readyz` | Public | model and engine readiness for load balancers |
 | `GET /healthz` | Public | readiness, pinned model, fixed mode |
+| `GET /v1/models` | Tenant bearer | OpenAI-style deployed-model discovery |
 | `GET /metrics` | Admin bearer | bounded counters, tenant usage, latency, scheduler, KV, GPU gauges |
+| `GET /metrics/prometheus` | Admin bearer | Prometheus text exposition of the same bounded snapshot |
 | `POST /v1/responses` | Tenant bearer | quota-controlled blocking JSON or SSE generation |
 
 Accepted request fields are `model`, `input`, optional `instructions`,
@@ -671,9 +703,23 @@ Expected operational errors include `401 authentication_failed`,
 - Triton validation fails closed on unsupported dtype, shape, block size, batch,
   or context unless reference fallback is explicitly enabled in non-deployed code.
 
-This is still a single shared API key, not tenant isolation. For an internet-facing
-service, add Modal proxy auth or an identity-aware gateway, per-user quotas,
-rate limits, audit policy, abuse monitoring, and key rotation.
+Tenant keys, concurrency limits, token budgets, and metrics permissions are
+isolated by policy. By default admission state remains process-local and Modal
+is capped at one container. For an internet-facing multi-container deployment,
+configure a TLS Redis endpoint in the Modal secret and opt into up to four
+containers; the Lua admission transaction atomically enforces quotas across
+replicas and fails closed when Redis is unavailable:
+
+```bash
+modal secret create cloud-inference-api \
+  ENGINE_TENANTS_JSON="$ENGINE_TENANTS_JSON" \
+  ADMISSION_REDIS_URL='rediss://USER:PASSWORD@HOST:PORT/0' --force
+ENGINE_MAX_CONTAINERS=4 modal deploy modal_app.py
+```
+
+`ENGINE_MAX_CONTAINERS>1` without `ADMISSION_REDIS_URL` is rejected at startup.
+Production internet exposure should still place an identity-aware gateway and
+abuse controls in front of the service and rotate tenant keys operationally.
 
 ## Metrics
 

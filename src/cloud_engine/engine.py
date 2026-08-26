@@ -13,6 +13,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from .attention import (
@@ -28,6 +29,7 @@ from .metrics import Metrics
 from .model import Qwen2CausalLM, greedy_sample, load_model_config
 from .profiling import nvtx_range
 from .scheduler import (
+    BatchItem,
     BatchPlan,
     GenerationConfig,
     PreemptionCandidate,
@@ -210,6 +212,7 @@ class RaggedRunner(RunnerBase):
         self.cuda_graph_captures = 0
         self.cuda_graph_replays = 0
         self._decode_graphs: dict[int, tuple[PackedBatch, Any, Any]] = {}
+        self._graph_pool: Any = None
 
     def admit(self, request: Request) -> None:
         self.cache.reserve(request.request_id, 0)
@@ -309,6 +312,48 @@ class RaggedRunner(RunnerBase):
         ):
             getattr(target.context, name).copy_(getattr(source.context, name))
 
+    @staticmethod
+    def _graph_bucket(batch_size: int) -> int:
+        return 1 << (batch_size - 1).bit_length()
+
+    def _pad_decode(self, packed: PackedBatch) -> PackedBatch:
+        import torch
+
+        count = packed.input_ids.shape[0]
+        bucket = self._graph_bucket(count)
+        if bucket == count:
+            return packed
+        padding = bucket - count
+
+        def repeat(tensor: Any) -> Any:
+            return torch.cat(
+                (tensor, tensor[-1:].expand(padding, *tensor.shape[1:])), dim=0
+            )
+
+        context = PackedContext(
+            request_ids=packed.context.request_ids
+            + (packed.context.request_ids[-1],) * padding,
+            query_ranges=tuple((index, index + 1) for index in range(bucket)),
+            context_lens=packed.context.context_lens
+            + (packed.context.context_lens[-1],) * padding,
+            final_lens=packed.context.final_lens
+            + (packed.context.final_lens[-1],) * padding,
+            positions=repeat(packed.context.positions),
+            query_start_loc=torch.arange(
+                bucket + 1, dtype=torch.int32, device=self.device
+            ),
+            block_tables=repeat(packed.context.block_tables),
+            slot_mapping=repeat(packed.context.slot_mapping),
+            query_seq_ids=torch.arange(bucket, dtype=torch.int32, device=self.device),
+        )
+        return PackedBatch(
+            input_ids=repeat(packed.input_ids),
+            context=context,
+            logit_indices=torch.arange(bucket, dtype=torch.long, device=self.device),
+            sampled_request_ids=packed.sampled_request_ids
+            + (packed.sampled_request_ids[-1],) * padding,
+        )
+
     def _graph_forward(self, packed: PackedBatch) -> Any:
         import torch
 
@@ -348,7 +393,9 @@ class RaggedRunner(RunnerBase):
             )
         torch.cuda.current_stream().wait_stream(warmup)
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
+        if self._graph_pool is None:
+            self._graph_pool = torch.cuda.graph_pool_handle()
+        with torch.cuda.graph(graph, pool=self._graph_pool):
             logits = self.model(
                 static.input_ids,
                 ctx=static.context,
@@ -358,6 +405,35 @@ class RaggedRunner(RunnerBase):
         self._decode_graphs[batch_size] = (static, graph, logits)
         self.cuda_graph_captures += 1
         return logits
+
+    def warm_cuda_graphs(self) -> None:
+        if not self.config.cuda_graph_decode or self.device != "cuda":
+            return
+        requests = []
+        try:
+            for index in range(self.config.max_active_sequences):
+                request = SimpleNamespace(request_id=f"__graph_warmup_{index}")
+                requests.append(request)
+                self.cache.reserve(request.request_id, 0)
+            size = 1
+            while size <= self.config.max_active_sequences:
+                plan = BatchPlan(
+                    tuple(
+                        BatchItem(
+                            request=request,
+                            token_ids=(0,),
+                            start_pos=0,
+                            sample=True,
+                            is_decode=True,
+                        )
+                        for request in requests[:size]
+                    )
+                )
+                self._graph_forward(self._pack(plan))
+                size *= 2
+        finally:
+            for request in requests:
+                self.cache.release(request.request_id)
 
     def execute_batch(self, plan: BatchPlan) -> dict[str, int]:
         import torch
@@ -383,23 +459,21 @@ class RaggedRunner(RunnerBase):
         with nvtx_range(
             f"ragged.forward.{phase}.requests_{len(plan.items)}.tokens_{plan.token_count}"
         ):
-            # ponytail: common powers of two bound graph memory; add bucketing only
-            # if production traces show meaningful traffic at other batch sizes.
             use_graph = (
                 self.config.cuda_graph_decode
                 and self.device == "cuda"
                 and phase == "decode"
-                and len(plan.items) in {1, 2, 4, 8, 16}
             )
-            logits = (
-                self._graph_forward(packed)
-                if use_graph
-                else self.model(
+            if use_graph:
+                logits = self._graph_forward(self._pad_decode(packed))[
+                    : len(packed.sampled_request_ids)
+                ]
+            else:
+                logits = self.model(
                     packed.input_ids,
                     ctx=packed.context,
                     logit_indices=packed.logit_indices,
                 )
-            )
         with nvtx_range("ragged.kv.commit"):
             self.cache.commit_lengths(
                 {item.request.request_id: item.end_pos for item in plan.items}
@@ -630,6 +704,7 @@ class InferenceEngine:
             self.runner = NaiveRunner(self.config, self.model, self.cache, self.device)
         elif self.config.mode == "ragged":
             self.runner = RaggedRunner(self.config, self.model, self.cache, self.device)
+            self.runner.warm_cuda_graphs()
         else:
             self.runner = CachedRunner(self.config, self.model, self.cache, self.device)
         self.ready = True

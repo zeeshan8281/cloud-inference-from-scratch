@@ -8,11 +8,14 @@ Unknown parameters and unsupported input forms are rejected, never ignored.
 import hmac
 import json
 import re
+import secrets
 import time
+import uuid
 from asyncio import CancelledError, Lock
 from collections import deque
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 ALLOWED_FIELDS = frozenset(
@@ -27,6 +30,7 @@ ALLOWED_FIELDS = frozenset(
     }
 )
 MAX_BODY_BYTES = 64 * 1024
+REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 
 
 class ApiError(Exception):
@@ -115,11 +119,19 @@ def authenticate(header_value: str | None, policies: dict[str, TenantPolicy]) ->
 
 
 class TenantLease:
-    def __init__(self, gate: "TenantGate", tenant: str, stamp: float, tokens: int) -> None:
+    def __init__(
+        self,
+        gate: Any,
+        tenant: str,
+        stamp: float,
+        tokens: int,
+        lease_id: str | None = None,
+    ) -> None:
         self._gate = gate
         self.tenant = tenant
         self._stamp = stamp
         self._tokens = tokens
+        self._lease_id = lease_id
         self._released = False
 
     async def release(self, *, rollback_tokens: bool = False) -> None:
@@ -190,6 +202,163 @@ class TenantGate:
                 }
                 for tenant, policy in self.policies.items()
             }
+
+
+class RedisTenantGate:
+    """Atomic cross-container admission and rolling quotas backed by Redis."""
+
+    _ACQUIRE = """
+local active = KEYS[1]
+local tokens = KEYS[2]
+local counts = KEYS[3]
+local now = tonumber(ARGV[1])
+local active_expiry = tonumber(ARGV[2])
+local token_cutoff = tonumber(ARGV[3])
+local max_concurrent = tonumber(ARGV[4])
+local token_limit = tonumber(ARGV[5])
+local requested = tonumber(ARGV[6])
+local lease = ARGV[7]
+local expired = redis.call('ZRANGEBYSCORE', tokens, '-inf', token_cutoff)
+for _, member in ipairs(expired) do redis.call('HDEL', counts, member) end
+redis.call('ZREMRANGEBYSCORE', tokens, '-inf', token_cutoff)
+redis.call('ZREMRANGEBYSCORE', active, '-inf', now)
+local active_count = redis.call('ZCARD', active)
+if active_count >= max_concurrent then return {0, 1, active_count, 0} end
+local reserved = 0
+for _, value in ipairs(redis.call('HVALS', counts)) do reserved = reserved + tonumber(value) end
+if reserved + requested > token_limit then return {0, 2, active_count, reserved} end
+redis.call('ZADD', active, active_expiry, lease)
+redis.call('ZADD', tokens, now, lease)
+redis.call('HSET', counts, lease, requested)
+redis.call('PEXPIRE', active, active_expiry - now + 60000)
+redis.call('PEXPIRE', tokens, 120000)
+redis.call('PEXPIRE', counts, 120000)
+return {1, 0, active_count + 1, reserved + requested}
+"""
+    _RELEASE = """
+redis.call('ZREM', KEYS[1], ARGV[1])
+if ARGV[2] == '1' then
+  redis.call('ZREM', KEYS[2], ARGV[1])
+  redis.call('HDEL', KEYS[3], ARGV[1])
+end
+return 1
+"""
+    _SNAPSHOT = """
+local active = KEYS[1]
+local tokens = KEYS[2]
+local counts = KEYS[3]
+local now = tonumber(ARGV[1])
+local cutoff = tonumber(ARGV[2])
+local expired = redis.call('ZRANGEBYSCORE', tokens, '-inf', cutoff)
+for _, member in ipairs(expired) do redis.call('HDEL', counts, member) end
+redis.call('ZREMRANGEBYSCORE', tokens, '-inf', cutoff)
+redis.call('ZREMRANGEBYSCORE', active, '-inf', now)
+local reserved = 0
+for _, value in ipairs(redis.call('HVALS', counts)) do reserved = reserved + tonumber(value) end
+return {redis.call('ZCARD', active), reserved}
+"""
+
+    def __init__(
+        self,
+        client: Any,
+        policies: dict[str, TenantPolicy],
+        *,
+        lease_seconds: int = 1800,
+        clock: Callable[[], float] = time.time,
+        namespace: str = "cie:admission",
+    ) -> None:
+        self.client = client
+        self.policies = policies
+        self.lease_seconds = lease_seconds
+        self._clock = clock
+        self.namespace = namespace
+
+    @classmethod
+    def from_url(
+        cls,
+        url: str,
+        policies: dict[str, TenantPolicy],
+        *,
+        lease_seconds: int = 1800,
+    ) -> "RedisTenantGate":
+        import redis.asyncio as redis
+
+        return cls(
+            redis.from_url(url, decode_responses=True, socket_connect_timeout=5),
+            policies,
+            lease_seconds=lease_seconds,
+        )
+
+    def _keys(self, tenant: str) -> tuple[str, str, str]:
+        prefix = f"{self.namespace}:{{{tenant}}}"
+        return f"{prefix}:active", f"{prefix}:tokens", f"{prefix}:counts"
+
+    async def acquire(self, tenant: str, tokens: int) -> TenantLease:
+        now_ms = int(self._clock() * 1000)
+        lease_id = secrets.token_hex(16)
+        policy = self.policies[tenant]
+        try:
+            result = await self.client.eval(
+                self._ACQUIRE,
+                3,
+                *self._keys(tenant),
+                now_ms,
+                now_ms + self.lease_seconds * 1000,
+                now_ms - 60_000,
+                policy.max_concurrent,
+                policy.tokens_per_minute,
+                tokens,
+                lease_id,
+            )
+        except Exception as exc:
+            raise ApiError(
+                503,
+                "admission_backend_unavailable",
+                "distributed admission backend unavailable",
+                {"Retry-After": "1"},
+            ) from exc
+        if int(result[0]) != 1:
+            if int(result[1]) == 1:
+                raise ApiError(429, "tenant_concurrency_limit", "tenant concurrency limit reached", {"Retry-After": "1"})
+            raise ApiError(429, "tenant_token_rate_limit", "tenant rolling token budget exceeded", {"Retry-After": "60"})
+        return TenantLease(self, tenant, now_ms / 1000, tokens, lease_id)
+
+    async def release(self, lease: TenantLease, *, rollback_tokens: bool) -> None:
+        try:
+            await self.client.eval(
+                self._RELEASE,
+                3,
+                *self._keys(lease.tenant),
+                lease._lease_id,
+                int(rollback_tokens),
+            )
+        except Exception as exc:
+            raise ApiError(503, "admission_backend_unavailable", "distributed admission backend unavailable") from exc
+
+    async def snapshot(self) -> dict[str, Any]:
+        now_ms = int(self._clock() * 1000)
+        snapshots: dict[str, Any] = {}
+        try:
+            for tenant, policy in self.policies.items():
+                active, reserved = await self.client.eval(
+                    self._SNAPSHOT,
+                    3,
+                    *self._keys(tenant),
+                    now_ms,
+                    now_ms - 60_000,
+                )
+                snapshots[tenant] = {
+                    "active": int(active),
+                    "reserved_tokens_60s": int(reserved),
+                    "max_concurrent": policy.max_concurrent,
+                    "tokens_per_minute": policy.tokens_per_minute,
+                }
+        except Exception as exc:
+            raise ApiError(503, "admission_backend_unavailable", "distributed admission backend unavailable") from exc
+        return snapshots
+
+    async def close(self) -> None:
+        await self.client.aclose()
 
 
 def _input_text(value: Any) -> str:
@@ -321,6 +490,37 @@ def sse_frame(event_type: str, payload: dict[str, Any]) -> str:
     return f"event: {event_type}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
 
 
+def prometheus_text(snapshot: dict[str, Any]) -> str:
+    """Render a bounded metrics snapshot in Prometheus text format."""
+    samples: list[tuple[str, str, float]] = []
+
+    def collect(value: Any, path: tuple[str, ...], labels: str = "") -> None:
+        if isinstance(value, dict):
+            for key in sorted(value):
+                if path == () and key == "tenants":
+                    for tenant, tenant_values in sorted(value[key].items()):
+                        safe_tenant = json.dumps(str(tenant))
+                        collect(tenant_values, ("tenant",), f'{{tenant={safe_tenant}}}')
+                else:
+                    collect(value[key], (*path, str(key)), labels)
+        elif isinstance(value, bool):
+            samples.append(("_".join(path), labels, float(value)))
+        elif isinstance(value, (int, float)):
+            samples.append(("_".join(path), labels, float(value)))
+
+    collect(snapshot, ())
+    lines: list[str] = []
+    declared: set[str] = set()
+    for raw_name, labels, value in samples:
+        name = "cie_" + re.sub(r"[^a-zA-Z0-9_:]", "_", raw_name)
+        rendered = str(int(value)) if value.is_integer() else repr(value)
+        if name not in declared:
+            lines.append(f"# TYPE {name} gauge")
+            declared.add(name)
+        lines.append(f"{name}{labels} {rendered}")
+    return "\n".join(lines) + "\n"
+
+
 async def response_event_sequence(
     base_response: dict[str, Any],
     deltas: AsyncIterator[str] | Callable[[], AsyncIterator[str]],
@@ -390,12 +590,14 @@ def create_app(
     model_id: str,
     logger: Any = None,
     tenant_policies: dict[str, TenantPolicy] | None = None,
+    ui_dir: str | Path | None = None,
+    admission_redis_url: str | None = None,
 ) -> Any:
     """Build the FastAPI application. Requires the cloud dependency set."""
     import logging
 
     from fastapi import FastAPI, Request
-    from fastapi.responses import JSONResponse, StreamingResponse
+    from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 
     log = logger or logging.getLogger("cloud_engine.api")
     if logger is None:
@@ -406,9 +608,50 @@ def create_app(
         tenant_policies = {
             "default": TenantPolicy(api_key, 32, 1_000_000_000, True)
         }
-    gate = TenantGate(tenant_policies)
+    gate = (
+        RedisTenantGate.from_url(admission_redis_url, tenant_policies)
+        if admission_redis_url
+        else TenantGate(tenant_policies)
+    )
 
     app = FastAPI(title="Cloud Inference Engine Lab", docs_url=None, redoc_url=None)
+
+    if isinstance(gate, RedisTenantGate):
+        @app.on_event("shutdown")
+        async def close_admission_backend() -> None:
+            await gate.close()
+
+    @app.middleware("http")
+    async def operational_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
+        supplied = request.headers.get("x-request-id", "")
+        request.state.request_id = (
+            supplied if REQUEST_ID_PATTERN.fullmatch(supplied) else f"req_{uuid.uuid4().hex}"
+        )
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request.state.request_id
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        return response
+
+    if ui_dir is not None:
+        assets = Path(ui_dir)
+
+        @app.get("/", include_in_schema=False)
+        async def operator_console():  # type: ignore[no-untyped-def]
+            return FileResponse(assets / "index.html", media_type="text/html")
+
+        @app.get("/ui/styles.css", include_in_schema=False)
+        async def operator_styles():  # type: ignore[no-untyped-def]
+            return FileResponse(assets / "styles.css", media_type="text/css")
+
+        @app.get("/ui/app.js", include_in_schema=False)
+        async def operator_script():  # type: ignore[no-untyped-def]
+            return FileResponse(assets / "app.js", media_type="text/javascript")
+
+        @app.get("/tokens.css", include_in_schema=False)
+        async def operator_tokens():  # type: ignore[no-untyped-def]
+            return FileResponse(assets.parent / "tokens.css", media_type="text/css")
 
     def audit_event(
         tenant: str,
@@ -436,11 +679,33 @@ def create_app(
     async def _api_error_handler(_request: Request, exc: ApiError):  # type: ignore[no-untyped-def]
         return JSONResponse(status_code=exc.status, content=exc.body(), headers=exc.headers)
 
+    @app.get("/livez")
+    async def livez():  # type: ignore[no-untyped-def]
+        return {"status": "alive"}
+
     @app.get("/healthz")
-    async def healthz():  # type: ignore[no-untyped-def]
+    @app.get("/readyz")
+    async def readyz():  # type: ignore[no-untyped-def]
         if engine.ready:
             return {"status": "ready", "model": model_id, "mode": engine.config.mode}
         return JSONResponse(status_code=503, content={"status": "starting"})
+
+    @app.get("/v1/models")
+    async def models(request: Request):  # type: ignore[no-untyped-def]
+        tenant = authenticate(request.headers.get("authorization"), tenant_policies)
+        if tenant is None:
+            return JSONResponse(status_code=401, content={"error": {"code": "authentication_failed"}})
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": model_id,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "cloud-inference-engine-lab",
+                }
+            ],
+        }
 
     @app.get("/metrics")
     async def metrics(request: Request):  # type: ignore[no-untyped-def]
@@ -452,6 +717,20 @@ def create_app(
         snapshot = engine.snapshot_metrics()
         snapshot["tenants"] = await gate.snapshot()
         return snapshot
+
+    @app.get("/metrics/prometheus")
+    async def prometheus_metrics(request: Request):  # type: ignore[no-untyped-def]
+        tenant = authenticate(request.headers.get("authorization"), tenant_policies)
+        if tenant is None:
+            return JSONResponse(status_code=401, content={"error": {"code": "authentication_failed"}})
+        if not tenant_policies[tenant].metrics:
+            return JSONResponse(status_code=403, content={"error": {"code": "permission_denied"}})
+        snapshot = engine.snapshot_metrics()
+        snapshot["tenants"] = await gate.snapshot()
+        return PlainTextResponse(
+            prometheus_text(snapshot),
+            media_type="text/plain; version=0.0.4",
+        )
 
     @app.post("/v1/responses")
     async def responses(request: Request):  # type: ignore[no-untyped-def]
