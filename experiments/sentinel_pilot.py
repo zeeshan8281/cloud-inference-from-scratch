@@ -753,7 +753,9 @@ def _summarize_phase(phase_result: dict[str, Any]) -> dict[str, Any]:
         "output_tokens_per_second": round(output_tokens / wall, 3) if wall else 0.0,
         "requests_per_second": round(len(successful) / wall, 3) if wall else 0.0,
         "failures": sum(record["error"] is not None for record in records),
-        "timeouts": sum(record.get("timeout", False) for record in records),
+        "timeouts": sum(
+            record.get("timeout", False) or record.get("error") == "timed_out" for record in records
+        ),
         "wall_seconds": round(wall, 3),
         "peak_gpu_memory_bytes": phase_result["peak_gpu_memory_bytes"],
         "torch_allocated_bytes": phase_result["torch_allocated_bytes"],
@@ -769,7 +771,11 @@ async def _run_phase(implementation: str, engine: Any, workload: list[dict[str, 
         phase_result = _run_vllm_phase(engine, workload, run_id)
     else:
         raise ValueError(f"unknown implementation: {implementation}")
-    timed_out = [record for record in phase_result["records"] if record.get("timeout")]
+    timed_out = [
+        record
+        for record in phase_result["records"]
+        if record.get("timeout") or record.get("error") == "timed_out"
+    ]
     if timed_out:
         raise StopPilot(
             "timeout",
@@ -825,12 +831,20 @@ async def run_child(
         try:
             resolved_num_gpu_blocks = engine.cache_config.num_gpu_blocks
         except Exception as exc:  # noqa: BLE001 - vLLM engine internals vary by version
+            resolved_num_gpu_blocks = None
             if mode == "resource_normalized":
                 raise StopPilot(
                     "kv_capacity_unresolved",
                     {"reason": f"{type(exc).__name__}: {exc}"},
                 ) from exc
-            resolved_num_gpu_blocks = None
+        if mode == "resource_normalized" and resolved_num_gpu_blocks is None:
+            # V1's multiprocess engine can leave cache_config unpopulated in
+            # this process without raising; unable to verify is treated the
+            # same as a blocked KV-capacity match, per protocol.
+            raise StopPilot(
+                "kv_capacity_unresolved",
+                {"reason": "engine.cache_config.num_gpu_blocks is None"},
+            )
         engine_config = {
             "enforce_eager": mode == "resource_normalized",
             "enable_prefix_caching": mode == "complete_system",
@@ -978,7 +992,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    raise SystemExit(
-        "experiments/sentinel_pilot.py is a library; run it via modal_app.py's "
-        "sentinel_pilot local_entrypoint, not directly"
-    )
+    main()

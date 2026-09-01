@@ -284,6 +284,26 @@ class TestRunPhaseStopsOnTimeout(unittest.TestCase):
         self.assertEqual(ctx.exception.kind, "timeout")
         self.assertEqual(ctx.exception.detail["timed_out_request_indices"], [1])
 
+    def test_a_scheduler_level_timed_out_error_also_raises_stop_pilot(self) -> None:
+        # A request can fail via the scheduler's own admission/queue timeout
+        # (terminal state != COMPLETED, error set to "timed_out") without the
+        # outer asyncio.wait_for ever firing, so `timeout` stays False.
+        with mock.patch.object(
+            sentinel_pilot,
+            "_run_vllm_phase",
+            return_value={
+                "records": [
+                    {"request_index": 0, "timeout": False, "error": None},
+                    {"request_index": 1, "timeout": False, "error": "timed_out"},
+                ],
+                "wall_seconds": 1.0,
+            },
+        ):
+            with self.assertRaises(StopPilot) as ctx:
+                asyncio.run(_run_phase("vllm", engine=None, workload=[], run_id="cell-cold"))
+        self.assertEqual(ctx.exception.kind, "timeout")
+        self.assertEqual(ctx.exception.detail["timed_out_request_indices"], [1])
+
     def test_no_timeouts_returns_the_phase_result_unchanged(self) -> None:
         expected = {"records": [{"request_index": 0, "timeout": False}], "wall_seconds": 1.0}
         with mock.patch.object(sentinel_pilot, "_run_vllm_phase", return_value=expected):
