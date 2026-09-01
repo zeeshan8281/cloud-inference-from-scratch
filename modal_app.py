@@ -1897,6 +1897,105 @@ def sentinel_pilot(
     )
 
 
+@app.function(
+    image=sentinel_image,
+    gpu=MODAL_CFG["gpu"],
+    volumes={"/cache": volume},
+    timeout=1800,
+    max_containers=1,
+)
+def _sentinel_self_consistency_check(mode: str) -> dict:
+    """Diagnostic, not part of the 10-pair protocol: does a single engine
+    reproduce its own greedy-decoded output across two fresh instances given
+    the identical materialized workload? If not, cross-engine token mismatches
+    at concurrency > 1 are inherent batched floating-point nondeterminism, not
+    something a harness or config change could fix."""
+    import asyncio
+
+    from transformers import AutoTokenizer
+
+    from experiments.sentinel_pilot import (
+        SENTINEL_CELLS,
+        _build_custom_engine,
+        _build_vllm_engine,
+        _run_custom_phase,
+        _run_vllm_phase,
+        build_pair_workload,
+        resolve_kv_plan,
+    )
+
+    _print_run_header(f"sentinel pilot self-consistency check: {mode}")
+    model_dir = _prepare_weights(RAGGED_MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    workload = build_pair_workload(mode, 9999, SENTINEL_CELLS, tokenizer)
+    phase_key = "unique" if mode == "resource_normalized" else "cold"
+    check_cells = ("in512-out128-c8", "in1024-out256-c32")
+
+    def kv_plan():
+        if mode != "resource_normalized":
+            return None
+        return resolve_kv_plan(model_dir, block_size=16, requested_bytes=PINNED["kv_cache"]["bytes"])
+
+    async def run_custom_once() -> dict:
+        _config, engine = _build_custom_engine(model_dir, mode, kv_plan())
+        await engine.start()
+        try:
+            out = {}
+            for cell_name in check_cells:
+                result = await _run_custom_phase(
+                    engine, workload["cells"][cell_name][phase_key], f"selfcheck-{cell_name}"
+                )
+                out[cell_name] = {r["request_index"]: r["output_token_ids"] for r in result["records"]}
+            return out
+        finally:
+            await engine.close()
+
+    def run_vllm_once() -> dict:
+        engine = _build_vllm_engine(model_dir, RAGGED_MODEL, mode, kv_plan())
+        try:
+            out = {}
+            for cell_name in check_cells:
+                result = _run_vllm_phase(
+                    engine, workload["cells"][cell_name][phase_key], f"selfcheck-{cell_name}"
+                )
+                out[cell_name] = {r["request_index"]: r["output_token_ids"] for r in result["records"]}
+            return out
+        finally:
+            shutdown = getattr(engine, "shutdown", None)
+            if shutdown is not None:
+                shutdown()
+
+    def diff(first: dict, second: dict) -> list[dict]:
+        mismatches = []
+        for cell_name in check_cells:
+            for index, ids in first[cell_name].items():
+                if second[cell_name].get(index) != ids:
+                    mismatches.append({"cell": cell_name, "request_index": index})
+        return mismatches
+
+    custom_first = asyncio.run(run_custom_once())
+    custom_second = asyncio.run(run_custom_once())
+    vllm_first = run_vllm_once()
+    vllm_second = run_vllm_once()
+
+    return {
+        "mode": mode,
+        "custom_self_consistent": diff(custom_first, custom_second) == [],
+        "custom_mismatches": diff(custom_first, custom_second),
+        "vllm_self_consistent": diff(vllm_first, vllm_second) == [],
+        "vllm_mismatches": diff(vllm_first, vllm_second),
+    }
+
+
+@app.local_entrypoint()
+def sentinel_self_consistency_check(mode: str = "resource_normalized") -> None:
+    """Diagnostic only. Answers: is a single engine's own greedy decode
+    reproducible run-to-run at concurrency > 1, independent of the other
+    engine entirely?"""
+    result = _sentinel_self_consistency_check.remote(mode)
+    print(json.dumps(result, indent=2))
+
+
 @app.local_entrypoint()
 def main(command: str = "help") -> None:
     commands = {
