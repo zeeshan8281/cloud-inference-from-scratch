@@ -111,6 +111,18 @@ python3 -m experiments.sentinel_diagnostics  # see classify_divergence, step_mar
 
 ## Proposed next correctness protocol
 
+**Superseded by `CORRECTNESS_PROTOCOL_V2.md`** (repo root). The sketch below
+proposed comparing "the two engines' output-token log-probability ... for
+the remainder of the sequence" after a first-token disagreement -- but once
+two engines emit different tokens at a position, every later position is
+conditioned on a different generated history for each engine, so that
+comparison is contaminated by construction. `CORRECTNESS_PROTOCOL_V2.md`
+replaces it: compare only while both engines share a generated prefix, and
+if a later-position comparison is ever needed, teacher-force the same fixed
+prefix into both engines as an explicitly separate diagnostic. The findings
+above (reproduction, margins, classification) are unaffected and stand as
+reported; only this proposal section had the flaw.
+
 The current gate (bit-exact token-ID match, any concurrency) is not
 achievable between these two engines whenever a batch happens to contain a
 near-tied logit for some request -- which is a property of the workload and
