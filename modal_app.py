@@ -1769,8 +1769,7 @@ def _sentinel_pair(mode: str, pair: int) -> dict:
     _print_run_header(f"sentinel pilot pair {pair:02d}: {mode}")
     model_dir = _prepare_weights(RAGGED_MODEL)
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
-    excluded_ids = frozenset(tokenizer.all_special_ids)
-    workload = build_pair_workload(mode, pair, SENTINEL_CELLS, tokenizer.vocab_size, excluded_ids)
+    workload = build_pair_workload(mode, pair, SENTINEL_CELLS, tokenizer)
 
     workdir = Path(tempfile.mkdtemp(prefix=f"sentinel-{mode}-pair{pair:02d}-"))
     workload_path = workdir / "workload.json"
@@ -1822,6 +1821,7 @@ def _sentinel_pair(mode: str, pair: int) -> dict:
     except StopPilot as exc:
         result["stop"] = exc.as_dict()
     result["gpu_states"] = gpu_states
+    result["workload"] = workload
     return result
 
 
@@ -1864,6 +1864,7 @@ def sentinel_pilot(
     (root / "source-manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"source manifest: commit {manifest['git_commit']} tree {manifest['git_tree']}")
 
+    workloads_path = root / "workloads.jsonl"
     stopped = False
     for mode in selected_modes:
         for pair in range(1, PAIRS + 1):
@@ -1872,6 +1873,9 @@ def sentinel_pilot(
                 pair_result = json.loads(path.read_text())
             else:
                 pair_result = _sentinel_pair.remote(mode, pair)
+                workload = pair_result.pop("workload")
+                with workloads_path.open("a") as handle:
+                    handle.write(json.dumps(workload, separators=(",", ":")) + "\n")
                 path.write_text(json.dumps(pair_result, indent=2))
             print(f"{mode} pair {pair:02d}: order={pair_result['order']} stop={pair_result['stop']}")
             if pair_result["stop"] is not None:

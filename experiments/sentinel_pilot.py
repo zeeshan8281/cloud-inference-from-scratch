@@ -95,29 +95,63 @@ def prompt_seed(mode: str, pair: int, cell_name: str, request_index: int, phase:
     return f"{PROTOCOL_VERSION}|{mode}|pair{pair}|{cell_name}|req{request_index}|{phase}"
 
 
-def sentinel_token_ids(
-    seed: str, length: int, vocab_size: int, excluded_ids: frozenset[int]
-) -> list[int]:
-    """Deterministic, high-entropy token IDs derived from `seed`.
+# A fixed pool of common English words used to build deterministic prompt
+# text. Uniformly-random token IDs across the *entire* vocabulary were tried
+# first and rejected: they produce out-of-distribution, near-meaningless
+# input that pushes the model's next-token distribution unusually flat, so
+# greedy decoding hits far more near-tied logits than realistic text does --
+# and a near-tied logit is exactly where two engines' different floating-point
+# accumulation order (different attention kernels) can pick different tokens.
+# This pool still gives combinatorially far more diversity than the four
+# repeating tokens it replaces, without that pathology.
+_COMMON_WORDS: tuple[str, ...] = (
+    "the", "of", "and", "a", "to", "in", "is", "you", "that", "it", "he", "was",
+    "for", "on", "are", "as", "with", "his", "they", "at", "be", "this", "have",
+    "from", "or", "one", "had", "by", "word", "but", "not", "what", "all", "were",
+    "we", "when", "your", "can", "said", "there", "use", "an", "each", "which",
+    "she", "do", "how", "their", "if", "will", "up", "other", "about", "out",
+    "many", "then", "them", "these", "so", "some", "her", "would", "make", "like",
+    "him", "into", "time", "has", "look", "two", "more", "write", "go", "see",
+    "number", "no", "way", "could", "people", "my", "than", "first", "water", "been",
+    "call", "who", "its", "now", "find", "long", "down", "day", "did", "get",
+    "come", "made", "may", "part", "over", "new", "sound", "take", "only", "little",
+    "work", "know", "place", "year", "live", "me", "back", "give", "most", "very",
+    "after", "thing", "our", "just", "name", "good", "sentence", "man", "think", "say",
+    "great", "where", "help", "through", "much", "before", "line", "right", "too", "mean",
+    "old", "any", "same", "tell", "boy", "follow", "came", "want", "show", "also",
+    "around", "form", "three", "small", "set", "put", "end", "why", "again", "turn",
+    "here", "off", "went", "old", "number", "great", "tell", "men", "say", "small",
+)
 
-    No wall-clock randomness and no tokenizer text generation: every position
-    is `sha256(seed|position|attempt)` reduced mod `vocab_size`, retried on
-    collision with an excluded (special/control) token ID. Two calls with the
-    same arguments always return the same IDs.
+
+def _sentinel_text(seed: str, word_count: int) -> str:
+    words = []
+    for position in range(word_count):
+        digest = hashlib.sha256(f"{seed}|word|{position}".encode()).digest()
+        index = int.from_bytes(digest[:8], "big") % len(_COMMON_WORDS)
+        words.append(_COMMON_WORDS[index])
+    return " ".join(words)
+
+
+def sentinel_token_ids(seed: str, length: int, tokenizer: Any) -> list[int]:
+    """Deterministic, natural-language-like token IDs derived from `seed`.
+
+    No wall-clock randomness: word choice is `sha256(seed|word|position)`
+    reduced mod the fixed word pool, and tokenization happens once here
+    during materialization, never during a timed measurement. Two calls with
+    the same arguments always return the same IDs.
     """
-    if vocab_size <= len(excluded_ids):
-        raise ValueError("vocab_size must exceed the number of excluded token IDs")
-    ids: list[int] = []
-    for position in range(length):
-        attempt = 0
-        while True:
-            digest = hashlib.sha256(f"{seed}|{position}|{attempt}".encode()).digest()
-            candidate = int.from_bytes(digest[:8], "big") % vocab_size
-            if candidate not in excluded_ids:
-                ids.append(candidate)
-                break
-            attempt += 1
-    return ids
+    word_count = max(length, 8)
+    for attempt in range(20):
+        text = _sentinel_text(f"{seed}|attempt{attempt}", word_count)
+        ids = tokenizer.encode(text, add_special_tokens=False)
+        if len(ids) >= length:
+            ids = ids[:length]
+            if any(token_id in tokenizer.all_special_ids for token_id in ids):
+                raise RuntimeError(f"special token ID present in materialized prompt for seed {seed!r}")
+            return ids
+        word_count = int(word_count * 1.5) + 8
+    raise RuntimeError(f"could not materialize {length} tokens for seed {seed!r}")
 
 
 def workload_hash(records: list[dict[str, Any]]) -> str:
@@ -130,8 +164,7 @@ def materialize_cell_workload(
     pair: int,
     cell: Cell,
     phase: str,
-    vocab_size: int,
-    excluded_ids: frozenset[int],
+    tokenizer: Any,
 ) -> list[dict[str, Any]]:
     """Materialize every request's exact input token IDs for one cell/phase,
     before either engine runs. Both engines consume this identical material."""
@@ -146,21 +179,16 @@ def materialize_cell_workload(
                 "input_tokens": cell.input_tokens,
                 "output_tokens": cell.output_tokens,
                 "seed": seed,
-                "input_token_ids": sentinel_token_ids(
-                    seed, cell.input_tokens, vocab_size, excluded_ids
-                ),
+                "input_token_ids": sentinel_token_ids(seed, cell.input_tokens, tokenizer),
             }
         )
     return records
 
 
 def materialize_warmup_workload(
-    mode: str, pair: int, cell: Cell, iteration: int, vocab_size: int, excluded_ids: frozenset[int]
+    mode: str, pair: int, cell: Cell, iteration: int, tokenizer: Any
 ) -> list[dict[str, Any]]:
-    return materialize_cell_workload(
-        mode, pair, cell, phase=f"warmup-{iteration}", vocab_size=vocab_size,
-        excluded_ids=excluded_ids,
-    )
+    return materialize_cell_workload(mode, pair, cell, phase=f"warmup-{iteration}", tokenizer=tokenizer)
 
 
 # --------------------------------------------------------------------------
@@ -419,24 +447,22 @@ WARMUP_ITERATIONS_MATERIALIZED = WARMUP_MAXIMUM
 
 
 def build_pair_workload(
-    mode: str, pair: int, cells: tuple[Cell, ...], vocab_size: int, excluded_ids: frozenset[int]
+    mode: str, pair: int, cells: tuple[Cell, ...], tokenizer: Any
 ) -> dict[str, Any]:
     """Materialize every request's input token IDs for one (mode, pair)
     before either engine runs. Both engines read this exact file."""
     cell_workloads: dict[str, Any] = {}
     for cell in cells:
         warmups = [
-            materialize_warmup_workload(mode, pair, cell, iteration, vocab_size, excluded_ids)
+            materialize_warmup_workload(mode, pair, cell, iteration, tokenizer)
             for iteration in range(WARMUP_ITERATIONS_MATERIALIZED)
         ]
         if mode == "resource_normalized":
-            phases = {"unique": materialize_cell_workload(
-                mode, pair, cell, "unique", vocab_size, excluded_ids
-            )}
+            phases = {"unique": materialize_cell_workload(mode, pair, cell, "unique", tokenizer)}
         elif mode == "complete_system":
             phases = {
-                "cold": materialize_cell_workload(mode, pair, cell, "cold", vocab_size, excluded_ids),
-                "warm": materialize_cell_workload(mode, pair, cell, "warm", vocab_size, excluded_ids),
+                "cold": materialize_cell_workload(mode, pair, cell, "cold", tokenizer),
+                "warm": materialize_cell_workload(mode, pair, cell, "warm", tokenizer),
             }
         else:
             raise ValueError(f"unknown comparison mode: {mode}")

@@ -9,6 +9,7 @@ GPU and is exercised by the actual Modal pilot run, not here.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import math
 import unittest
 from pathlib import Path
@@ -37,11 +38,35 @@ from experiments.sentinel_pilot import (
 REPO_ROOT = Path(__file__).parents[1]
 
 
+class FakeTokenizer:
+    """One word -> one deterministic (non-Python-hash) token ID, stable
+    across PYTHONHASHSEED. `tokens_per_word` simulates BPE tokenizers that
+    split a word into more than one token, exercising sentinel_token_ids'
+    retry-with-more-words loop."""
+
+    all_special_ids = frozenset({0, 1, 2})
+
+    def __init__(self, tokens_per_word: int = 1):
+        self.tokens_per_word = tokens_per_word
+
+    def _word_id(self, word: str, sub_index: int) -> int:
+        digest = hashlib.sha256(f"{word}|{sub_index}".encode()).digest()
+        return 3 + int.from_bytes(digest[:4], "big") % 9997
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        del add_special_tokens
+        ids = []
+        for word in text.split(" "):
+            ids.extend(self._word_id(word, sub) for sub in range(self.tokens_per_word))
+        return ids
+
+
 class TestDeterministicPrompts(unittest.TestCase):
     def test_same_arguments_always_produce_the_same_ids(self) -> None:
         seed = prompt_seed("resource_normalized", 3, "in128-out128-c1", 5, "unique")
-        first = sentinel_token_ids(seed, 32, vocab_size=1000, excluded_ids=frozenset())
-        second = sentinel_token_ids(seed, 32, vocab_size=1000, excluded_ids=frozenset())
+        tokenizer = FakeTokenizer()
+        first = sentinel_token_ids(seed, 32, tokenizer)
+        second = sentinel_token_ids(seed, 32, tokenizer)
         self.assertEqual(first, second)
         self.assertEqual(len(first), 32)
 
@@ -51,29 +76,38 @@ class TestDeterministicPrompts(unittest.TestCase):
         other_phase = prompt_seed("resource_normalized", 1, "cell", 0, "warm")
         self.assertNotEqual(base, other_index)
         self.assertNotEqual(base, other_phase)
-        ids_base = sentinel_token_ids(base, 16, 5000, frozenset())
-        ids_other = sentinel_token_ids(other_index, 16, 5000, frozenset())
+        tokenizer = FakeTokenizer()
+        ids_base = sentinel_token_ids(base, 16, tokenizer)
+        ids_other = sentinel_token_ids(other_index, 16, tokenizer)
         self.assertNotEqual(ids_base, ids_other)
 
-    def test_excluded_special_token_ids_never_appear(self) -> None:
+    def test_never_emits_a_special_token_id(self) -> None:
         seed = prompt_seed("complete_system", 2, "cell", 0, "cold")
-        excluded = frozenset(range(50))  # a deliberately wide, easy-to-hit ban list
-        ids = sentinel_token_ids(seed, 64, vocab_size=200, excluded_ids=excluded)
-        self.assertTrue(all(token_id not in excluded for token_id in ids))
+        tokenizer = FakeTokenizer()
+        ids = sentinel_token_ids(seed, 64, tokenizer)
+        self.assertTrue(all(token_id not in tokenizer.all_special_ids for token_id in ids))
         self.assertEqual(len(ids), 64)
 
     def test_high_entropy_not_a_cyclic_repeat_of_a_handful_of_ids(self) -> None:
         seed = prompt_seed("resource_normalized", 1, "in1024-out256-c32", 0, "unique")
-        ids = sentinel_token_ids(seed, 1024, vocab_size=150_000, excluded_ids=frozenset())
-        self.assertGreater(len(set(ids)), 900)  # cyclic 4-token prompts would give 4
+        ids = sentinel_token_ids(seed, 1024, FakeTokenizer())
+        self.assertGreater(len(set(ids)), 50)  # cyclic 4-token prompts would give 4
+
+    def test_retries_with_more_words_when_the_tokenizer_undershoots(self) -> None:
+        class UndershootingTokenizer(FakeTokenizer):
+            def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+                ids = super().encode(text, add_special_tokens)
+                return ids[: len(ids) // 2]  # simulate BPE merging words together
+
+        seed = prompt_seed("resource_normalized", 1, "cell", 0, "unique")
+        ids = sentinel_token_ids(seed, 40, UndershootingTokenizer())
+        self.assertEqual(len(ids), 40)
 
 
 class TestPairWorkloadMaterialization(unittest.TestCase):
     def test_resource_normalized_has_one_unique_phase_and_warmups_are_disjoint_from_it(self) -> None:
         cells = (Cell(128, 128, 1),)
-        payload = build_pair_workload(
-            "resource_normalized", 1, cells, vocab_size=100_000, excluded_ids=frozenset()
-        )
+        payload = build_pair_workload("resource_normalized", 1, cells, FakeTokenizer())
         cell_out = payload["cells"]["in128-out128-c1"]
         self.assertIn("unique", cell_out)
         self.assertNotIn("cold", cell_out)
@@ -83,9 +117,7 @@ class TestPairWorkloadMaterialization(unittest.TestCase):
 
     def test_complete_system_has_disjoint_cold_and_warm_and_warmup_phases(self) -> None:
         cells = (Cell(128, 128, 1),)
-        payload = build_pair_workload(
-            "complete_system", 1, cells, vocab_size=100_000, excluded_ids=frozenset()
-        )
+        payload = build_pair_workload("complete_system", 1, cells, FakeTokenizer())
         cell_out = payload["cells"]["in128-out128-c1"]
         cold_ids = {tuple(r["input_token_ids"]) for r in cell_out["cold"]}
         warm_ids = {tuple(r["input_token_ids"]) for r in cell_out["warm"]}
@@ -96,13 +128,13 @@ class TestPairWorkloadMaterialization(unittest.TestCase):
 
     def test_same_pair_and_mode_reproduces_byte_identical_workload(self) -> None:
         cells = (Cell(128, 128, 1), Cell(512, 128, 8))
-        first = build_pair_workload("complete_system", 4, cells, 100_000, frozenset())
-        second = build_pair_workload("complete_system", 4, cells, 100_000, frozenset())
+        first = build_pair_workload("complete_system", 4, cells, FakeTokenizer())
+        second = build_pair_workload("complete_system", 4, cells, FakeTokenizer())
         self.assertEqual(first, second)
 
     def test_workload_hash_is_persisted_and_matches_recomputation(self) -> None:
         cells = (Cell(128, 128, 1),)
-        payload = build_pair_workload("resource_normalized", 2, cells, 100_000, frozenset())
+        payload = build_pair_workload("resource_normalized", 2, cells, FakeTokenizer())
         stripped = {key: value for key, value in payload.items() if key != "workload_hash"}
         self.assertEqual(payload["workload_hash"], workload_hash([stripped]))
 
