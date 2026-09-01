@@ -201,6 +201,50 @@ vllm_image = (
     )
 )
 
+# One image capable of running both engines: vLLM 0.10.0 pins torch==2.7.1,
+# the same torch the custom Triton kernel is pinned against, so both engines
+# can share a single container for the sentinel pilot's paired child processes.
+sentinel_image = (
+    modal.Image.debian_slim(python_version=IMAGE_PINS["python_version"])
+    .pip_install(
+        f"torch=={IMAGE_PINS['torch']}",
+        f"triton=={IMAGE_PINS['triton']}",
+        f"safetensors=={IMAGE_PINS['safetensors']}",
+        "vllm==0.10.0",
+        "transformers==4.53.2",
+        "tokenizers==0.21.2",
+        "huggingface_hub==0.33.4",
+    )
+    .add_local_dir(
+        Path(__file__).parent / "src/cloud_engine",
+        "/root/cloud_engine",
+        copy=True,
+    )
+    .add_local_file(
+        Path(__file__).parent / "experiments/controlled.py",
+        "/root/experiments/controlled.py",
+        copy=True,
+    )
+    .add_local_file(
+        Path(__file__).parent / "experiments/sentinel_pilot.py",
+        "/root/experiments/sentinel_pilot.py",
+        copy=True,
+    )
+    .add_local_file(
+        Path(__file__).parent / "engine_config.json",
+        "/root/engine_config.json",
+        copy=True,
+    )
+    .env(
+        {
+            "HF_HUB_DISABLE_TELEMETRY": "1",
+            "SOURCE_COMMIT": SOURCE_COMMIT,
+            "TRITON_CACHE_DIR": "/cache/triton-cache",
+            "TOKENIZERS_PARALLELISM": "false",
+        }
+    )
+)
+
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 
@@ -1630,6 +1674,223 @@ class ApiServer:
     @modal.asgi_app()
     def serve(self):  # type: ignore[no-untyped-def]
         return self.app
+
+
+def _sentinel_torch_cuda_version() -> str | None:
+    try:
+        import torch
+
+        return torch.version.cuda
+    except Exception:
+        return None
+
+
+def _sentinel_phase_outputs(child_result: dict) -> dict:
+    cells = {}
+    for cell_name, cell_data in child_result["cells"].items():
+        phases = {}
+        for phase_name, phase_data in cell_data["phases"].items():
+            records = sorted(phase_data["records"], key=lambda record: record["request_index"])
+            phases[phase_name] = [record["output_token_ids"] for record in records]
+        cells[cell_name] = phases
+    return cells
+
+
+def _run_sentinel_child(
+    implementation: str, mode: str, pair: int, model_dir: str, workload_path: Path, workdir: Path
+) -> dict:
+    workdir.mkdir(parents=True, exist_ok=True)
+    output_path = workdir / "result.json"
+    stdout_path = workdir / "stdout.log"
+    stderr_path = workdir / "stderr.log"
+    with open(stdout_path, "w") as out, open(stderr_path, "w") as err:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "/root/experiments/sentinel_pilot.py",
+                implementation,
+                mode,
+                str(pair),
+                model_dir,
+                str(workload_path),
+                str(output_path),
+            ],
+            stdout=out,
+            stderr=err,
+            env=dict(os.environ, PYTHONPATH="/root"),
+        )
+    child = {
+        "implementation": implementation,
+        "returncode": completed.returncode,
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+        "crashed": completed.returncode != 0,
+        "stop": None,
+    }
+    if child["crashed"]:
+        stderr_text = stderr_path.read_text()
+        child["stderr_tail"] = stderr_text[-4000:]
+        if "CUDA out of memory" in stderr_text or "OutOfMemoryError" in stderr_text:
+            child["oom"] = True
+    else:
+        payload = json.loads(output_path.read_text())
+        if "stop" in payload:
+            # An orderly in-process stop rule (e.g. a request timeout), not a
+            # crash: the child wrote this itself instead of its full result.
+            child["stop"] = payload["stop"]
+        else:
+            child["result"] = payload
+    return child
+
+
+@app.function(
+    image=sentinel_image,
+    gpu=MODAL_CFG["gpu"],
+    volumes={"/cache": volume},
+    timeout=3600,
+    scaledown_window=MODAL_CFG["scaledown_window_seconds"],
+    max_containers=1,
+)
+def _sentinel_pair(mode: str, pair: int) -> dict:
+    """One paired sentinel-pilot round: two fresh child processes, one custom
+    and one vLLM, run sequentially inside this single GPU allocation. Odd
+    pairs run custom-then-vLLM; even pairs run the reverse."""
+    from transformers import AutoTokenizer
+
+    from experiments.sentinel_pilot import (
+        SENTINEL_CELLS,
+        StopPilot,
+        assert_gpu_identity_stable,
+        build_pair_workload,
+        check_token_parity,
+        gpu_state_snapshot,
+    )
+
+    _print_run_header(f"sentinel pilot pair {pair:02d}: {mode}")
+    model_dir = _prepare_weights(RAGGED_MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    excluded_ids = frozenset(tokenizer.all_special_ids)
+    workload = build_pair_workload(mode, pair, SENTINEL_CELLS, tokenizer.vocab_size, excluded_ids)
+
+    workdir = Path(tempfile.mkdtemp(prefix=f"sentinel-{mode}-pair{pair:02d}-"))
+    workload_path = workdir / "workload.json"
+    workload_path.write_text(json.dumps(workload))
+
+    order = "odd" if pair % 2 == 1 else "even"
+    implementations = ("custom", "vllm") if order == "odd" else ("vllm", "custom")
+    cuda_version = _sentinel_torch_cuda_version()
+
+    result: dict = {
+        "mode": mode,
+        "pair": pair,
+        "order": order,
+        "workload_hash": workload["workload_hash"],
+        "children": [],
+        "stop": None,
+    }
+    gpu_states = [gpu_state_snapshot(cuda_version)]
+    try:
+        for position, implementation in enumerate(implementations, start=1):
+            child = _run_sentinel_child(
+                implementation, mode, pair, model_dir, workload_path, workdir / f"child-{position}"
+            )
+            child["position"] = position
+            result["children"].append(child)
+            gpu_states.append(gpu_state_snapshot(cuda_version))
+            assert_gpu_identity_stable(gpu_states)
+            if child["stop"] is not None:
+                raise StopPilot(
+                    child["stop"]["kind"],
+                    {"implementation": implementation, "position": position, **child["stop"]["detail"]},
+                )
+            if child["crashed"]:
+                raise StopPilot(
+                    "oom" if child.get("oom") else "child_crash",
+                    {
+                        "implementation": implementation,
+                        "position": position,
+                        "returncode": child["returncode"],
+                        "stderr_tail": child["stderr_tail"],
+                    },
+                )
+
+        by_implementation = {child["implementation"]: child["result"] for child in result["children"]}
+        check_token_parity(
+            _sentinel_phase_outputs(by_implementation["custom"]),
+            _sentinel_phase_outputs(by_implementation["vllm"]),
+        )
+    except StopPilot as exc:
+        result["stop"] = exc.as_dict()
+    result["gpu_states"] = gpu_states
+    return result
+
+
+@app.local_entrypoint()
+def sentinel_pilot(
+    output: str = "experiments/sentinel-pilot",
+    modes: str = "resource_normalized,complete_system",
+    resume: bool = False,
+) -> None:
+    """Fixed 10-pair, direct-engine closed-batch pilot vs vLLM 0.10.0 on one
+    NVIDIA L4. NOT the nine-cell matrix rerun and NOT an HTTP/production
+    serving benchmark -- see NEXT_EXPERIMENT_HANDOFF.md."""
+    from experiments.sentinel_pilot import PAIRS, build_source_manifest
+
+    root = Path(output)
+    selected_modes = [value.strip() for value in modes.split(",") if value.strip()]
+    unknown = set(selected_modes) - {"resource_normalized", "complete_system"}
+    if unknown:
+        raise SystemExit(f"unknown modes: {sorted(unknown)}")
+
+    mode_dirs = {
+        "resource_normalized": root / "raw/resource-normalized",
+        "complete_system": root / "raw/complete-policy",
+    }
+    for path in mode_dirs.values():
+        path.mkdir(parents=True, exist_ok=True)
+
+    repo_root = Path(__file__).parent
+    manifest = build_source_manifest(
+        repo_root,
+        [
+            repo_root / "modal_app.py",
+            repo_root / "experiments/sentinel_pilot.py",
+            repo_root / "experiments/controlled.py",
+            repo_root / "engine_config.json",
+        ],
+    )
+    if manifest["dirty"]:
+        raise SystemExit("refusing to run the sentinel pilot from a dirty source tree")
+    (root / "source-manifest.json").write_text(json.dumps(manifest, indent=2))
+    print(f"source manifest: commit {manifest['git_commit']} tree {manifest['git_tree']}")
+
+    stopped = False
+    for mode in selected_modes:
+        for pair in range(1, PAIRS + 1):
+            path = mode_dirs[mode] / f"pair-{pair:02d}.json"
+            if resume and path.exists():
+                pair_result = json.loads(path.read_text())
+            else:
+                pair_result = _sentinel_pair.remote(mode, pair)
+                path.write_text(json.dumps(pair_result, indent=2))
+            print(f"{mode} pair {pair:02d}: order={pair_result['order']} stop={pair_result['stop']}")
+            if pair_result["stop"] is not None:
+                stopped = True
+                break
+        if stopped:
+            break
+
+    if stopped:
+        print(
+            "sentinel pilot STOPPED; all evidence retained under "
+            f"{root}. No performance claim may be generated from a stopped pilot."
+        )
+        return
+    print(
+        f"sentinel pilot pairs complete: {root}\n"
+        "run: python3 experiments/sentinel_report.py "
+        f"{output} to regenerate summaries/plots"
+    )
 
 
 @app.local_entrypoint()
