@@ -63,11 +63,14 @@ def _by_implementation(pair: dict[str, Any]) -> dict[str, Any]:
 
 def _mismatch_diagnostics(pair: dict[str, Any]) -> list[dict[str, Any]]:
     """For a stopped, token_mismatch pair: the first output position at which
-    the two engines' token IDs actually differ, per mismatched request. Early
-    divergence confined to concurrency > 1 cells is the signature of
-    floating-point non-associativity across two different batched-execution
-    kernels, not a harness defect; this is computed directly from the raw
-    records so it is reproducible, not asserted by hand."""
+    the two engines' token IDs actually differ, per mismatched request.
+    Divergence confined to concurrency > 1 cells, combined with the
+    self-consistency check (each engine reproduces its own output exactly
+    across repeated runs of the identical workload -- see
+    summaries/self-consistency-check.json), means the two engines compute
+    deterministically different results from each other under batched
+    execution: not per-run randomness, and not a harness defect. This table
+    is computed directly from the raw records, not asserted by hand."""
     by_implementation = _by_implementation(pair)
     rows = []
     for mismatch in pair["stop"]["detail"].get("mismatches", []):
@@ -220,10 +223,11 @@ def _write_findings(
                         f"{len(diagnostics)} of the pair's sentinel requests mismatched, confined to "
                         f"concurrency {sorted(concurrencies)} cells; first differing output position "
                         f"ranged {min(r['first_diff_position'] for r in positioned)}-"
-                        f"{max(r['first_diff_position'] for r in positioned)} tokens in. Divergence "
-                        "limited to concurrency > 1, appearing within the first few output tokens, is "
-                        "the signature of floating-point non-associativity across the two engines' "
-                        "different batched-attention kernels at fp16 -- not a harness defect."
+                        f"{max(r['first_diff_position'] for r in positioned)} tokens in. A separate "
+                        "self-consistency check (see below) shows each engine reproduces its own output "
+                        "exactly across repeated runs, so this is not per-run randomness: the two engines "
+                        "compute deterministically different results from each other under concurrent "
+                        "batched execution at fp16, not a harness defect."
                     )
                 lines.append("")
                 lines.extend(
@@ -269,7 +273,38 @@ def _write_findings(
                     f"{order['even']['geometric_mean_ratio']:.3f}x |"
                 )
         lines.append("")
+    lines.extend(_self_consistency_section())
     (ROOT / "summaries/findings.md").write_text("\n".join(lines) + "\n")
+
+
+def _self_consistency_section() -> list[str]:
+    """If a self-consistency diagnostic (sentinel_self_consistency_check) has
+    been run and its result saved to summaries/self-consistency-check.json,
+    fold it into the report: it is the direct evidence for whether observed
+    cross-engine mismatches are per-run randomness or a deterministic
+    difference between the two engines."""
+    path = ROOT / "summaries/self-consistency-check.json"
+    if not path.is_file():
+        return []
+    result = json.loads(path.read_text())
+    return [
+        "## Self-consistency diagnostic",
+        "",
+        "Not part of the 10-pair protocol: each engine run twice, independently, "
+        "in fresh subprocesses, on the identical materialized concurrency-8/32 "
+        "workload, with the other engine entirely absent from the comparison.",
+        "",
+        f"- Custom engine self-consistent across repeated runs: **{result['custom_self_consistent']}** "
+        f"({len(result['custom_mismatches'])} mismatches).",
+        f"- vLLM self-consistent across repeated runs: **{result['vllm_self_consistent']}** "
+        f"({len(result['vllm_mismatches'])} mismatches).",
+        "",
+        "Both self-consistent means the token mismatches found above are not "
+        "per-run randomness: the two engines deterministically compute "
+        "different results from each other under concurrent batched execution "
+        "at fp16, reproducibly, not due to noise.",
+        "",
+    ]
 
 
 def _write_plots(analysis: dict[str, dict[str, dict[str, Any]]]) -> None:

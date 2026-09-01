@@ -1,0 +1,8 @@
+{
+  "mode": "resource_normalized",
+  "custom_self_consistent": true,
+  "custom_mismatches": [],
+  "vllm_self_consistent": true,
+  "vllm_mismatches": [],
+  "note": "Each engine run twice independently (fresh subprocess each time) on the identical materialized c8/c32 workload. Zero mismatches within either engine, ruling out per-run randomness as the source of the cross-engine mismatches found in raw/resource-normalized/pair-01.json and raw/complete-policy/pair-01.json."
+}

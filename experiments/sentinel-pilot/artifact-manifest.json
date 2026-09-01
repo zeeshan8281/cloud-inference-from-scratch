@@ -6,7 +6,8 @@
   "source-manifest.json": "af064f71e4baf20e43407fe715a6ab16cf5571e096c5bdb6a6054d4a391f14ec",
   "summaries/correctness.json": "bd0388ded998f5be1237c88b38927d1e14b30035dd5a8b6030e19f9f10369747",
   "summaries/exclusions.md": "41f3b2858f46e0e8351aac3fdadd4d184ad55da525e4be44a8c0bc86e679812f",
-  "summaries/findings.md": "10b29dbf39b9e160595b113cfea33dc5e4ea8fe085598da46de7c0b4457bee45",
+  "summaries/findings.md": "82ab0f5318062696fc6a85cef9030f6a52e6dbe5d4659cc3c412ae2b13445b01",
   "summaries/paired-results.csv": "179ff1b8b1d7b5fc45b79735f41a1cac2d96e2718d8044739d5c09e43084c89a",
+  "summaries/self-consistency-check.json": "ef2d99a555df5dae85e11af71735a7de13b5c540b74b8ba6525b35aec587e317",
   "workloads.jsonl": "1bb7f78fcf3adc884a2e526005115753e496e4465034f4425dffabfd6b9be5bc"
 }

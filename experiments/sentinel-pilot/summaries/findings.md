@@ -7,7 +7,7 @@ Not an HTTP or production-serving benchmark. `c*` in a cell name is offered conc
 **STOPPED.** No performance claim may be generated from a stopped pilot.
 
 Pair 01: stop kind `token_mismatch`.
-4 of the pair's sentinel requests mismatched, confined to concurrency [8, 32] cells; first differing output position ranged 0-2 tokens in. Divergence limited to concurrency > 1, appearing within the first few output tokens, is the signature of floating-point non-associativity across the two engines' different batched-attention kernels at fp16 -- not a harness defect.
+4 of the pair's sentinel requests mismatched, confined to concurrency [8, 32] cells; first differing output position ranged 0-2 tokens in. A separate self-consistency check (see below) shows each engine reproduces its own output exactly across repeated runs, so this is not per-run randomness: the two engines compute deterministically different results from each other under concurrent batched execution at fp16, not a harness defect.
 
 | Cell | Concurrency | Phase | Request | First diff position | Sequence length |
 |---|---:|---|---:|---:|---:|
@@ -21,7 +21,7 @@ Pair 01: stop kind `token_mismatch`.
 **STOPPED.** No performance claim may be generated from a stopped pilot.
 
 Pair 01: stop kind `token_mismatch`.
-6 of the pair's sentinel requests mismatched, confined to concurrency [8, 32] cells; first differing output position ranged 0-2 tokens in. Divergence limited to concurrency > 1, appearing within the first few output tokens, is the signature of floating-point non-associativity across the two engines' different batched-attention kernels at fp16 -- not a harness defect.
+6 of the pair's sentinel requests mismatched, confined to concurrency [8, 32] cells; first differing output position ranged 0-2 tokens in. A separate self-consistency check (see below) shows each engine reproduces its own output exactly across repeated runs, so this is not per-run randomness: the two engines compute deterministically different results from each other under concurrent batched execution at fp16, not a harness defect.
 
 | Cell | Concurrency | Phase | Request | First diff position | Sequence length |
 |---|---:|---|---:|---:|---:|
@@ -31,4 +31,13 @@ Pair 01: stop kind `token_mismatch`.
 | `in1024-out256-c32` | 32 | cold | 24 | 2 | 256 |
 | `in1024-out256-c32` | 32 | warm | 5 | 2 | 256 |
 | `in1024-out256-c32` | 32 | warm | 28 | 0 | 256 |
+
+## Self-consistency diagnostic
+
+Not part of the 10-pair protocol: each engine run twice, independently, in fresh subprocesses, on the identical materialized concurrency-8/32 workload, with the other engine entirely absent from the comparison.
+
+- Custom engine self-consistent across repeated runs: **True** (0 mismatches).
+- vLLM self-consistent across repeated runs: **True** (0 mismatches).
+
+Both self-consistent means the token mismatches found above are not per-run randomness: the two engines deterministically compute different results from each other under concurrent batched execution at fp16, reproducibly, not due to noise.
 
