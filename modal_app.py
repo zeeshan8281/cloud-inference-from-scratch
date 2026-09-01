@@ -1906,23 +1906,20 @@ def sentinel_pilot(
 )
 def _sentinel_self_consistency_check(mode: str) -> dict:
     """Diagnostic, not part of the 10-pair protocol: does a single engine
-    reproduce its own greedy-decoded output across two fresh instances given
-    the identical materialized workload? If not, cross-engine token mismatches
-    at concurrency > 1 are inherent batched floating-point nondeterminism, not
-    something a harness or config change could fix."""
-    import asyncio
+    reproduce its own greedy-decoded output across two fresh, isolated child
+    processes given the identical materialized workload? If not, cross-engine
+    token mismatches at concurrency > 1 are inherent batched floating-point
+    nondeterminism, not something a harness or config change could fix.
 
+    Each of the four runs (custom x2, vLLM x2) is a genuinely fresh
+    subprocess -- same isolation the real 10-pair protocol uses -- because
+    reusing one process's CUDA allocator across four engine lifecycles left
+    stale reserved memory that starved later engines (observed directly: a
+    real ValueError/RuntimeError from vLLM's memory profiler, not a finding
+    about the mismatch question)."""
     from transformers import AutoTokenizer
 
-    from experiments.sentinel_pilot import (
-        SENTINEL_CELLS,
-        _build_custom_engine,
-        _build_vllm_engine,
-        _run_custom_phase,
-        _run_vllm_phase,
-        build_pair_workload,
-        resolve_kv_plan,
-    )
+    from experiments.sentinel_pilot import SENTINEL_CELLS, build_pair_workload
 
     _print_run_header(f"sentinel pilot self-consistency check: {mode}")
     model_dir = _prepare_weights(RAGGED_MODEL)
@@ -1931,39 +1928,18 @@ def _sentinel_self_consistency_check(mode: str) -> dict:
     phase_key = "unique" if mode == "resource_normalized" else "cold"
     check_cells = ("in512-out128-c8", "in1024-out256-c32")
 
-    def kv_plan():
-        if mode != "resource_normalized":
-            return None
-        return resolve_kv_plan(model_dir, block_size=16, requested_bytes=PINNED["kv_cache"]["bytes"])
+    workdir = Path(tempfile.mkdtemp(prefix=f"sentinel-selfcheck-{mode}-"))
+    workload_path = workdir / "workload.json"
+    workload_path.write_text(json.dumps(workload))
 
-    async def run_custom_once() -> dict:
-        _config, engine = _build_custom_engine(model_dir, mode, kv_plan())
-        await engine.start()
-        try:
-            out = {}
-            for cell_name in check_cells:
-                result = await _run_custom_phase(
-                    engine, workload["cells"][cell_name][phase_key], f"selfcheck-{cell_name}"
-                )
-                out[cell_name] = {r["request_index"]: r["output_token_ids"] for r in result["records"]}
-            return out
-        finally:
-            await engine.close()
-
-    def run_vllm_once() -> dict:
-        engine = _build_vllm_engine(model_dir, RAGGED_MODEL, mode, kv_plan())
-        try:
-            out = {}
-            for cell_name in check_cells:
-                result = _run_vllm_phase(
-                    engine, workload["cells"][cell_name][phase_key], f"selfcheck-{cell_name}"
-                )
-                out[cell_name] = {r["request_index"]: r["output_token_ids"] for r in result["records"]}
-            return out
-        finally:
-            shutdown = getattr(engine, "shutdown", None)
-            if shutdown is not None:
-                shutdown()
+    def cell_outputs(child_result: dict) -> dict:
+        return {
+            cell_name: {
+                record["request_index"]: record["output_token_ids"]
+                for record in child_result["cells"][cell_name]["phases"][phase_key]["records"]
+            }
+            for cell_name in check_cells
+        }
 
     def diff(first: dict, second: dict) -> list[dict]:
         mismatches = []
@@ -1973,17 +1949,24 @@ def _sentinel_self_consistency_check(mode: str) -> dict:
                     mismatches.append({"cell": cell_name, "request_index": index})
         return mismatches
 
-    custom_first = asyncio.run(run_custom_once())
-    custom_second = asyncio.run(run_custom_once())
-    vllm_first = run_vllm_once()
-    vllm_second = run_vllm_once()
+    runs: dict[str, list[dict]] = {"custom": [], "vllm": []}
+    for implementation in ("custom", "vllm"):
+        for attempt in range(2):
+            child = _run_sentinel_child(
+                implementation, mode, 9999, model_dir, workload_path, workdir / f"{implementation}-{attempt}"
+            )
+            if child["crashed"]:
+                return {"mode": mode, "implementation": implementation, "crashed": True, "child": child}
+            runs[implementation].append(cell_outputs(child["result"]))
 
+    custom_mismatches = diff(runs["custom"][0], runs["custom"][1])
+    vllm_mismatches = diff(runs["vllm"][0], runs["vllm"][1])
     return {
         "mode": mode,
-        "custom_self_consistent": diff(custom_first, custom_second) == [],
-        "custom_mismatches": diff(custom_first, custom_second),
-        "vllm_self_consistent": diff(vllm_first, vllm_second) == [],
-        "vllm_mismatches": diff(vllm_first, vllm_second),
+        "custom_self_consistent": custom_mismatches == [],
+        "custom_mismatches": custom_mismatches,
+        "vllm_self_consistent": vllm_mismatches == [],
+        "vllm_mismatches": vllm_mismatches,
     }
 
 
