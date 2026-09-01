@@ -13,11 +13,13 @@ import unittest
 from experiments.sentinel_diagnostics import (
     NUM_EXTRA_FILLERS,
     TARGET_CELL,
+    TARGET_REQUEST_INDEX,
     batch_for_concurrency,
     build_diagnostic_prompts,
     classify_divergence,
     compare_top_k,
     logprobs_from_logits,
+    natural_order_c8_batch,
     step_margin,
     top_k_from_logits,
 )
@@ -50,6 +52,18 @@ class TestBatchConstruction(unittest.TestCase):
         first = build_diagnostic_prompts(tokenizer)
         second = build_diagnostic_prompts(tokenizer)
         self.assertEqual(first, second)
+
+    def test_natural_order_batch_matches_the_real_cell_exactly(self) -> None:
+        from experiments.sentinel_pilot import materialize_cell_workload
+
+        tokenizer = FakeTokenizer()
+        real_cell = materialize_cell_workload("resource_normalized", 1, TARGET_CELL, "unique", tokenizer)
+        prompts = build_diagnostic_prompts(tokenizer)
+        batch, target_index = natural_order_c8_batch(prompts)
+        self.assertEqual(target_index, TARGET_REQUEST_INDEX)
+        self.assertEqual(len(batch), TARGET_CELL.concurrency)
+        self.assertEqual(batch, [record["input_token_ids"] for record in real_cell])
+        self.assertEqual(batch[target_index], prompts["target"]["input_token_ids"])
 
 
 class TestLogitMetrics(unittest.TestCase):

@@ -2019,7 +2019,11 @@ def _sentinel_divergence_diagnostic() -> dict:
     experiments/sentinel_diagnostics.py for the full design rationale."""
     from transformers import AutoTokenizer
 
-    from experiments.sentinel_diagnostics import batch_for_concurrency, build_diagnostic_prompts
+    from experiments.sentinel_diagnostics import (
+        batch_for_concurrency,
+        build_diagnostic_prompts,
+        natural_order_c8_batch,
+    )
 
     _print_run_header("sentinel pilot divergence diagnostic")
     model_dir = _prepare_weights(RAGGED_MODEL)
@@ -2029,27 +2033,37 @@ def _sentinel_divergence_diagnostic() -> dict:
     workdir = Path(tempfile.mkdtemp(prefix="sentinel-diagnostic-"))
     runs: dict[str, dict] = {}
 
-    def run(name: str, implementation: str, concurrency: int, **engine_options) -> None:
+    def run(name: str, implementation: str, batch_ids: list, target_index: int = 0, **engine_options) -> None:
         config = {
             "implementation": implementation,
             "model_dir": model_dir,
-            "batch_ids": batch_for_concurrency(prompts, concurrency),
+            "batch_ids": batch_ids,
+            "target_index": target_index,
             "engine_options": engine_options,
         }
         runs[name] = _run_diagnostic_child(config, workdir / name)
 
     # Base condition (matches the resource_normalized sentinel-pilot mode
-    # exactly) at every concurrency level.
+    # exactly) at every concurrency level. Target always at batch position 0.
     for concurrency in (1, 2, 8, 32):
-        run(f"custom_base_c{concurrency}", "custom", concurrency)
-        run(f"vllm_base_c{concurrency}", "vllm", concurrency)
+        batch_ids = batch_for_concurrency(prompts, concurrency)
+        run(f"custom_base_c{concurrency}", "custom", batch_ids)
+        run(f"vllm_base_c{concurrency}", "vllm", batch_ids)
 
-    # Backend matrix at c8 only (the smallest failing case).
-    run("custom_c8_torch_attention", "custom", 8, use_triton_attention=False)
-    run("custom_c8_graphs_on", "custom", 8, cuda_graph_decode=True)
-    run("custom_c8_prefix_cache_on", "custom", 8, prefix_cache_max_blocks=256)
-    run("vllm_c8_graphs_on", "vllm", 8, enforce_eager=False)
-    run("vllm_c8_prefix_cache_on", "vllm", 8, enable_prefix_caching=True)
+    # The exact original c8 batch in its natural request_index submission
+    # order (target at index 1, not reordered to the front). Batch
+    # composition/order is itself a candidate cause, not just concurrency.
+    natural_batch, natural_target_index = natural_order_c8_batch(prompts)
+    run("custom_c8_original_order", "custom", natural_batch, target_index=natural_target_index)
+    run("vllm_c8_original_order", "vllm", natural_batch, target_index=natural_target_index)
+
+    # Backend matrix at c8 only (the smallest failing case), target-first order.
+    c8_batch = batch_for_concurrency(prompts, 8)
+    run("custom_c8_torch_attention", "custom", c8_batch, use_triton_attention=False)
+    run("custom_c8_graphs_on", "custom", c8_batch, cuda_graph_decode=True)
+    run("custom_c8_prefix_cache_on", "custom", c8_batch, prefix_cache_max_blocks=256)
+    run("vllm_c8_graphs_on", "vllm", c8_batch, enforce_eager=False)
+    run("vllm_c8_prefix_cache_on", "vllm", c8_batch, enable_prefix_caching=True)
 
     # Hugging Face Transformers reference, concurrency 1 only (see
     # run_hf_diagnostic's docstring for why: no padding needed at c1, so

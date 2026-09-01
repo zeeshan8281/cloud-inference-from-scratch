@@ -57,8 +57,28 @@ def build_diagnostic_prompts(tokenizer: Any) -> dict[str, Any]:
 
 
 def batch_for_concurrency(prompts: dict[str, Any], concurrency: int) -> list[list[int]]:
+    """Target always at position 0, for a stable, simple row identity across
+    every concurrency level. Order-of-submission is itself a candidate cause
+    of batch-composition-dependent divergence (see natural_order_c8_batch),
+    so this alone is not sufficient to rule out the original failing case."""
     fillers = prompts["fillers"][: concurrency - 1]
     return [prompts["target"]["input_token_ids"]] + [f["input_token_ids"] for f in fillers]
+
+
+def natural_order_c8_batch(prompts: dict[str, Any]) -> tuple[list[list[int]], int]:
+    """The exact 8-request c8 cell in its original request_index submission
+    order (target at its natural position, TARGET_REQUEST_INDEX), not
+    reordered to put the target first. Returns (batch_ids, target_index)."""
+    real_fillers_by_index = {
+        f["request_index"]: f["input_token_ids"] for f in prompts["fillers"] if isinstance(f["request_index"], int)
+    }
+    batch = []
+    for index in range(TARGET_CELL.concurrency):
+        if index == TARGET_REQUEST_INDEX:
+            batch.append(prompts["target"]["input_token_ids"])
+        else:
+            batch.append(real_fillers_by_index[index])
+    return batch, TARGET_REQUEST_INDEX
 
 
 # --------------------------------------------------------------------------
@@ -153,10 +173,17 @@ def classify_divergence(
 # --------------------------------------------------------------------------
 
 
-async def run_custom_diagnostic(model_dir: str, engine_options: dict[str, Any], batch_ids: list[list[int]]) -> dict:
-    """Runs `batch_ids` (target at index 0) through the custom engine and
-    captures the target's per-step top-k via a non-invasive, self-verifying
+async def run_custom_diagnostic(
+    model_dir: str, engine_options: dict[str, Any], batch_ids: list[list[int]], target_index: int = 0
+) -> dict:
+    """Runs `batch_ids` through the custom engine and captures the request at
+    `target_index`'s per-step top-k via a non-invasive, self-verifying
     observer hook -- no reimplementation of RaggedRunner's internals.
+
+    Submission uses asyncio.gather over one coroutine per request, matching
+    experiments/controlled.py's _run_custom_phase exactly (not a sequential
+    awaited loop): submission concurrency/ordering is itself a candidate
+    variable, not just batch content.
 
     Hook: wrap RaggedRunner._pack (records which request IDs are in each
     batched forward call, in order) and BOTH of the two logit-producing call
@@ -218,14 +245,16 @@ async def run_custom_diagnostic(model_dir: str, engine_options: dict[str, Any], 
     runner.model.forward = wrapped_forward
     runner._graph_forward = wrapped_graph_forward
 
+    async def submit_one(index: int, ids: list[int]):
+        return await engine.scheduler.submit(
+            f"diag-{index}", ids,
+            GenerationConfig(max_output_tokens=STEPS, temperature=0, eos_token_id=None),
+        )
+
     try:
-        requests = [
-            await engine.scheduler.submit(
-                f"diag-{index}", ids,
-                GenerationConfig(max_output_tokens=STEPS, temperature=0, eos_token_id=None),
-            )
-            for index, ids in enumerate(batch_ids)
-        ]
+        requests = await asyncio.gather(
+            *(submit_one(index, ids) for index, ids in enumerate(batch_ids))
+        )
         handles = [RequestHandle(request, engine) for request in requests]
         await asyncio.gather(*(handle.wait() for handle in handles))
     finally:
@@ -234,8 +263,8 @@ async def run_custom_diagnostic(model_dir: str, engine_options: dict[str, Any], 
         runner._graph_forward = original_graph_forward
         await engine.close()
 
-    target_id = "diag-0"
-    target_tokens = list(requests[0].generated_token_ids)[:STEPS]
+    target_id = f"diag-{target_index}"
+    target_tokens = list(requests[target_index].generated_token_ids)[:STEPS]
     per_step_top_k = []
     for pack, logits in zip(captured_packs, captured_logits, strict=True):
         if target_id in pack.sampled_request_ids:
@@ -252,7 +281,13 @@ async def run_custom_diagnostic(model_dir: str, engine_options: dict[str, Any], 
     }
 
 
-def run_vllm_diagnostic(model_dir: str, model: dict[str, Any], engine_options: dict[str, Any], batch_ids: list[list[int]]) -> dict:
+def run_vllm_diagnostic(
+    model_dir: str,
+    model: dict[str, Any],
+    engine_options: dict[str, Any],
+    batch_ids: list[list[int]],
+    target_index: int = 0,
+) -> dict:
     from vllm import EngineArgs, LLMEngine, SamplingParams
 
     args = EngineArgs(
@@ -287,7 +322,7 @@ def run_vllm_diagnostic(model_dir: str, model: dict[str, Any], engine_options: d
         if shutdown is not None:
             shutdown()
 
-    target = finished["diag-0"]
+    target = finished[f"diag-{target_index}"]
     token_ids = list(target.token_ids)[:STEPS]
     per_step_top_k = []
     for step_logprobs in (target.logprobs or [])[:STEPS]:
@@ -336,11 +371,14 @@ def main() -> None:
     model_dir = config["model_dir"]
     batch_ids = config["batch_ids"]
     implementation = config["implementation"]
+    target_index = config.get("target_index", 0)
 
     if implementation == "custom":
-        result = asyncio.run(run_custom_diagnostic(model_dir, config.get("engine_options", {}), batch_ids))
+        result = asyncio.run(
+            run_custom_diagnostic(model_dir, config.get("engine_options", {}), batch_ids, target_index)
+        )
     elif implementation == "vllm":
-        result = run_vllm_diagnostic(model_dir, model, config.get("engine_options", {}), batch_ids)
+        result = run_vllm_diagnostic(model_dir, model, config.get("engine_options", {}), batch_ids, target_index)
     elif implementation == "hf":
         result = run_hf_diagnostic(model_dir, config.get("dtype", "float16"), batch_ids)
     else:
