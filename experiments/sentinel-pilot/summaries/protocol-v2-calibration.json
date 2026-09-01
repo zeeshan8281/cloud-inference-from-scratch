@@ -1,0 +1,1011 @@
+{
+  "split": "calibration",
+  "epsilon": null,
+  "crashed": {},
+  "classifications": [
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c1",
+      "batch_index": 0,
+      "concurrency": 1
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c1",
+      "batch_index": 1,
+      "concurrency": 1
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c1",
+      "batch_index": 2,
+      "concurrency": 1
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "disagreement_unclassified_pending_epsilon",
+      "disagreement": {
+        "position": 1,
+        "custom_token": 3015,
+        "vllm_token": 2182,
+        "custom_margin": 0.0015811920166015625,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 10.003066548729578,
+        "mean_abs_diff": 0.9561773696081071,
+        "cosine_similarity": 0.8429167842961341,
+        "top_k_overlap": 0.95,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "disagreement_unclassified_pending_epsilon",
+      "disagreement": {
+        "position": 0,
+        "custom_token": 429,
+        "vllm_token": 279,
+        "custom_margin": 0.00667572021484375,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.009675577181050166,
+        "mean_abs_diff": 0.004713901897774342,
+        "cosine_similarity": 0.9999992659758784,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "disagreement_unclassified_pending_epsilon",
+      "disagreement": {
+        "position": 2,
+        "custom_token": 3409,
+        "vllm_token": 264,
+        "custom_margin": 0.010967254638671875,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.009985078610995402,
+        "mean_abs_diff": 0.0039959279412087765,
+        "cosine_similarity": 0.9999993490986799,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "disagreement_unclassified_pending_epsilon",
+      "disagreement": {
+        "position": 1,
+        "custom_token": 429,
+        "vllm_token": 279,
+        "custom_margin": 0.001354217529296875,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.00925348600219067,
+        "mean_abs_diff": 0.0042973264063103315,
+        "cosine_similarity": 0.9999994068471555,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "disagreement_unclassified_pending_epsilon",
+      "disagreement": {
+        "position": 0,
+        "custom_token": 279,
+        "vllm_token": 264,
+        "custom_margin": 0.01117706298828125,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.011542757377261736,
+        "mean_abs_diff": 0.004162657253374213,
+        "cosine_similarity": 0.9999993550776802,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "disagreement_unclassified_pending_epsilon",
+      "disagreement": {
+        "position": 5,
+        "custom_token": 323,
+        "vllm_token": 279,
+        "custom_margin": 0.000274658203125,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.009532855942103957,
+        "mean_abs_diff": 0.0038633419082310105,
+        "cosine_similarity": 0.999999418201072,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "disagreement_unclassified_pending_epsilon",
+      "disagreement": {
+        "position": 0,
+        "custom_token": 3015,
+        "vllm_token": 432,
+        "custom_margin": 0.000640869140625,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.009817145389659387,
+        "mean_abs_diff": 0.00365371484335828,
+        "cosine_similarity": 0.9999995315780286,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "disagreement_unclassified_pending_epsilon",
+      "disagreement": {
+        "position": 0,
+        "custom_token": 429,
+        "vllm_token": 279,
+        "custom_margin": 0.0061740875244140625,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.010384038466506595,
+        "mean_abs_diff": 0.004120805934725857,
+        "cosine_similarity": 0.9999994993028606,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "disagreement_unclassified_pending_epsilon",
+      "disagreement": {
+        "position": 1,
+        "custom_token": 1401,
+        "vllm_token": 279,
+        "custom_margin": 0.00435638427734375,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 10.004183182035659,
+        "mean_abs_diff": 0.9554616872954996,
+        "cosine_similarity": 0.8367607115068244,
+        "top_k_overlap": 0.95,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "disagreement_unclassified_pending_epsilon",
+      "disagreement": {
+        "position": 1,
+        "custom_token": 323,
+        "vllm_token": 264,
+        "custom_margin": 0.012599945068359375,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.010398510572603215,
+        "mean_abs_diff": 0.0036900166151216498,
+        "cosine_similarity": 0.9999994965693697,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    }
+  ],
+  "summary": {
+    "total": 107,
+    "exact_match": 97,
+    "exact_match_pct": 90.65,
+    "near_tie_qualified": 0,
+    "near_tie_qualified_pct": 0.0,
+    "hard_failures": 0,
+    "hard_failure_pct": 0.0,
+    "pending_epsilon": 10,
+    "hard_failure_detail": [],
+    "near_tie_margins": []
+  },
+  "proposed_epsilon": {
+    "epsilon": 0.012599945068359375,
+    "candidate_count": 10,
+    "candidate_margins": [
+      0.000274658203125,
+      0.000640869140625,
+      0.001354217529296875,
+      0.0015811920166015625,
+      0.00435638427734375,
+      0.0061740875244140625,
+      0.00667572021484375,
+      0.010967254638671875,
+      0.01117706298828125,
+      0.012599945068359375
+    ]
+  }
+}

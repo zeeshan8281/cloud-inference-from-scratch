@@ -1,7 +1,8 @@
-# Correctness Protocol V2 (proposed; not executed)
+# Correctness Protocol V2
 
-Status: **specification only**. Nothing in this document has been run.
-Performance measurement remains paused. The original stopped pilot
+Status: **calibration executed, epsilon committed, holdout not yet
+evaluated**. Performance measurement remains paused. The original stopped
+pilot
 (`experiments/sentinel-pilot/raw/resource-normalized/pair-01.json`,
 `experiments/sentinel-pilot/raw/complete-policy/pair-01.json`) is preserved
 unchanged and remains the valid result of the protocol that produced it.
@@ -179,11 +180,35 @@ If any of these fail, the correctness gate is not satisfied, and this
 protocol's own recommendation is the same as the existing sentinel pilot's:
 stop, retain the evidence, and do not generate a performance claim.
 
+## Calibration results and committed epsilon
+
+Executed via `modal run modal_app.py::protocol_v2_calibration`
+(`experiments/protocol_v2.py`, commit `af13518` and later). 107 requests
+(concurrency 1 x3 batches, 8 x5, 32 x2; `V2_STEPS=8`), 0 crashes.
+
+| | |
+|---|---:|
+| Exact match | 97 / 107 (90.65%) |
+| Disagreements (pending epsilon) | 10 / 107 (9.35%) |
+| Hard failures among disagreements | 0 |
+| Candidate margins observed | 0.000275 – 0.012600 |
+
+All 10 disagreements were "clean" candidates: no own-top-k inconsistency, no
+non-finite logits, no low top-k overlap, no missing cross-presence in the
+other engine's top-k, and none at concurrency 1 (confirming requirement 1
+held throughout calibration -- zero concurrency-1 disagreements at all).
+
+**Committed epsilon (requirement 6/7): `0.012599945068359375`** -- the
+maximum margin among the 10 clean candidates, per the rule already specified
+above (never chosen by inspection after the fact). Full data:
+`experiments/sentinel-pilot/summaries/protocol-v2-calibration.json`.
+
+This epsilon has not yet been evaluated against the sealed holdout set.
+
 ## What this document does not do
 
-It does not choose an epsilon. It does not draw the calibration or holdout
-prompt sets. It does not run any engine. It does not modify
+It does not modify
 `experiments/sentinel-pilot/summaries/divergence-analysis.md`'s findings,
-which stand as reported. Implementing requirements 3-10 (calibration
-harness, holdout sealing, reporting) is future work, tracked separately from
-both the stopped pilot and the completed bounded diagnostic.
+which stand as reported. It does not resume the 10-pair performance
+protocol -- that is a separate, explicit decision gated on requirement 10,
+made only after the sealed holdout set (not calibration) is evaluated.
