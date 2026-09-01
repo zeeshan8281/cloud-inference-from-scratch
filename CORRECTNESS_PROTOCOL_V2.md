@@ -223,16 +223,26 @@ The 2 hard failures, both `confident_disagreement_no_near_tie` (one engine's
 own margin exceeded the committed epsilon):
 
 1. `in512-out128-c8`, position 1: custom margin 0.0136 (marginally above
-   epsilon), vLLM margin 0.0 (exact tie). Max abs log-prob diff **10.0**,
-   top-20 overlap 0.95 -- unlike the originally diagnosed case, this one's
-   two distributions differ substantially somewhere in the top-20, not just
-   by a marginal perturbation. Worth individual scrutiny, not just a wider
-   epsilon.
+   epsilon), vLLM margin 0.0 (exact tie), top-20 overlap 0.95.
+   **Correction:** this document originally reported "max abs log-prob diff
+   10.0" here as evidence the two distributions differ "substantially...
+   not just by a marginal perturbation." That number was a measurement
+   artifact of `compare_top_k`'s now-fixed union-with-synthetic-floor
+   comparison, which imputed a missing top-20 token as `min(logprob) - 10`
+   -- with 0.95 overlap (only 1/20 tokens not shared), that single imputed
+   token alone produced the ~10 figure; it was not a real property of
+   either engine's output distribution. Recomputed over the true
+   intersection only, this case's actual diff is small, consistent with the
+   originally diagnosed request. See
+   `experiments/sentinel-pilot/summaries/protocol-v2-audit.md` for the
+   corrected re-examination (diagnostic only; does not change the verdict
+   below).
 2. `in512-out128-c32`, position 1: custom margin 0.0000267 (itself an
    essentially exact tie), vLLM margin 0.015625 -- exceeds the committed
    epsilon by about 24%. Max abs diff 0.0094, overlap 1.0: same small-scale
    signature as the originally diagnosed request, just past the specific
-   numeric cutoff a 10-sample calibration set happened to produce.
+   numeric cutoff a 10-sample calibration set happened to produce. This
+   case's metric was not affected by the `compare_top_k` bug above.
 
 This is the expected, correct behavior of a properly sealed evaluation: an
 epsilon derived from only 10 calibration candidates does not fully
@@ -241,12 +251,14 @@ let a small sample's ceiling pass silently. Full data:
 `experiments/sentinel-pilot/summaries/protocol-v2-holdout.json`.
 
 **Per requirement 10, the 10-pair performance protocol does not resume.**
-The correct next step is a larger calibration sample (to better characterize
-the true near-tie margin distribution) or per-case inspection of failure 1
-specifically (its large max-abs-diff is qualitatively different from every
-other disagreement observed across this entire investigation) -- not
-re-deriving epsilon from this holdout set, which would be tuning a threshold
-on the data used to test it.
+The originally reported concern that failure 1's "large max-abs-diff" was
+qualitatively different from every other disagreement was itself based on
+the measurement artifact corrected above, not a real distributional
+difference. The corrected next step (executed as a bounded, diagnostic-only
+audit -- see `experiments/sentinel-pilot/summaries/protocol-v2-audit.md`)
+is a larger, statistically-justified calibration sample against a fresh
+sealed holdout namespace (Protocol V3), not re-deriving epsilon from this
+holdout set, which would be tuning a threshold on the data used to test it.
 
 ## What this document does not do
 

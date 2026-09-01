@@ -18,6 +18,7 @@ from experiments.sentinel_diagnostics import (
     build_diagnostic_prompts,
     classify_divergence,
     compare_top_k,
+    cross_choice_diagnostics,
     logprobs_from_logits,
     natural_order_c8_batch,
     step_margin,
@@ -88,15 +89,67 @@ class TestLogitMetrics(unittest.TestCase):
     def test_compare_top_k_identical_lists_gives_perfect_agreement(self) -> None:
         top = [(1, -0.1), (2, -1.0), (3, -2.0)]
         metrics = compare_top_k(top, top)
-        self.assertAlmostEqual(metrics["max_abs_diff"], 0.0, places=9)
-        self.assertAlmostEqual(metrics["cosine_similarity"], 1.0, places=9)
+        self.assertAlmostEqual(metrics["intersection_max_abs_diff"], 0.0, places=9)
+        self.assertAlmostEqual(metrics["intersection_cosine_similarity"], 1.0, places=9)
         self.assertAlmostEqual(metrics["top_k_overlap"], 3 / 20)
+        self.assertEqual(metrics["intersection_size"], 3)
 
-    def test_compare_top_k_disjoint_lists_give_zero_overlap(self) -> None:
+    def test_compare_top_k_disjoint_lists_give_zero_overlap_and_no_invented_diffs(self) -> None:
         a = [(1, -0.1), (2, -1.0)]
         b = [(3, -0.1), (4, -1.0)]
         metrics = compare_top_k(a, b)
         self.assertEqual(metrics["top_k_overlap"], 0.0)
+        self.assertEqual(metrics["intersection_size"], 0)
+        self.assertIsNone(metrics["intersection_max_abs_diff"])
+        self.assertIsNone(metrics["intersection_mean_abs_diff"])
+        self.assertIsNone(metrics["intersection_cosine_similarity"])
+
+    def test_compare_top_k_partial_overlap_only_uses_shared_tokens(self) -> None:
+        a = [(1, -0.1), (2, -1.0), (3, -5.0)]
+        b = [(1, -0.1), (2, -1.5), (9, -0.2)]
+        metrics = compare_top_k(a, b)
+        self.assertEqual(metrics["intersection_size"], 2)
+        self.assertAlmostEqual(metrics["intersection_max_abs_diff"], 0.5, places=9)
+
+
+class TestCrossChoiceDiagnostics(unittest.TestCase):
+    def test_both_choices_present_in_both_lists_gives_real_margins_and_ranks(self) -> None:
+        custom_top_k = [(10, -0.1), (20, -0.2), (30, -0.3)]
+        vllm_top_k = [(20, -0.05), (10, -0.4), (30, -0.5)]
+        result = cross_choice_diagnostics(custom_top_k, vllm_top_k, custom_token=10, vllm_token=20)
+        self.assertAlmostEqual(result["custom_cross_margin"], -0.1 - (-0.2), places=9)
+        self.assertAlmostEqual(result["vllm_cross_margin"], -0.05 - (-0.4), places=9)
+        self.assertEqual(result["vllm_choice_rank_in_custom"], 2)
+        self.assertEqual(result["custom_choice_rank_in_vllm"], 2)
+
+    def test_missing_token_reports_unavailable_not_invented(self) -> None:
+        custom_top_k = [(10, -0.1), (20, -0.2)]
+        vllm_top_k = [(30, -0.05), (40, -0.4)]
+        result = cross_choice_diagnostics(custom_top_k, vllm_top_k, custom_token=10, vllm_token=30)
+        self.assertIsNone(result["logp_custom_at_vllm_choice"])
+        self.assertIsNone(result["custom_cross_margin"])
+        self.assertIsNone(result["vllm_choice_rank_in_custom"])
+        self.assertIsNone(result["custom_choice_rank_in_vllm"])
+
+
+class TestCrossRequestIdentity(unittest.TestCase):
+    def test_no_match_when_all_outputs_differ(self) -> None:
+        from experiments.sentinel_diagnostics import check_cross_request_identity
+
+        target = {"index": 0, "output_tokens": [1, 2, 3]}
+        others = [{"index": 1, "output_tokens": [4, 5, 6]}, {"index": 2, "output_tokens": [7, 8, 9]}]
+        result = check_cross_request_identity(target, [target, *others])
+        self.assertFalse(result["contamination_suspected"])
+        self.assertEqual(result["matching_indices"], [])
+
+    def test_identical_output_to_a_distinct_request_is_flagged(self) -> None:
+        from experiments.sentinel_diagnostics import check_cross_request_identity
+
+        target = {"index": 0, "output_tokens": [1, 2, 3]}
+        contaminated = {"index": 1, "output_tokens": [1, 2, 3]}
+        result = check_cross_request_identity(target, [target, contaminated])
+        self.assertTrue(result["contamination_suspected"])
+        self.assertEqual(result["matching_indices"], [1])
 
 
 class TestClassification(unittest.TestCase):

@@ -19,7 +19,14 @@ from pathlib import Path
 from typing import Any
 
 from experiments.controlled import Cell
-from experiments.sentinel_diagnostics import TOP_K, compare_top_k, step_margin, top_k_from_logits
+from experiments.sentinel_diagnostics import (
+    TOP_K,
+    check_cross_request_identity,
+    compare_top_k,
+    cross_choice_diagnostics,
+    step_margin,
+    top_k_from_logits,
+)
 from experiments.sentinel_pilot import prompt_seed, sentinel_token_ids
 
 PROTOCOL_VERSION = "correctness-protocol-v2"
@@ -60,6 +67,112 @@ def build_split_batches(tokenizer: Any, split: str) -> dict[str, list[list[list[
 
 
 # --------------------------------------------------------------------------
+# Bounded audit of the two sealed-holdout hard failures (diagnostic only --
+# per CORRECTNESS_PROTOCOL_V2.md audit instructions, this does NOT change
+# the sealed verdict: Protocol V2 still failed as originally preregistered)
+# --------------------------------------------------------------------------
+
+# The two sealed-holdout hard failures, located by manually recovering each
+# request's position within its batch from protocol-v2-holdout.json (that
+# file does not itself store index_in_batch).
+AUDIT_TARGETS: tuple[dict[str, Any], ...] = (
+    {"cell": "in512-out128-c8", "batch_index": 1, "index_in_batch": 6},
+    {"cell": "in512-out128-c32", "batch_index": 1, "index_in_batch": 22},
+)
+
+
+def build_audit_variants(tokenizer: Any, target: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Three batch-construction variants for one flagged request, per the
+    audit instructions: alone, in its original batch and position, and in
+    the same batch reordered so the target is first. Rebuilt from the same
+    deterministic holdout seeds `build_split_batches` already uses -- this
+    is reconstruction, not new prompt content, so it stays inside the
+    sealed holdout namespace (these two requests are no longer being used
+    as validation data, only re-examined as diagnostics)."""
+    batches_by_cell = build_split_batches(tokenizer, "holdout")
+    original_batch = batches_by_cell[target["cell"]][target["batch_index"]]
+    index_in_batch = target["index_in_batch"]
+    target_ids = original_batch[index_in_batch]
+    reordered = [target_ids, *(ids for i, ids in enumerate(original_batch) if i != index_in_batch)]
+    return {
+        "alone": {"batch_ids": [target_ids], "target_index": 0},
+        "original": {"batch_ids": original_batch, "target_index": index_in_batch},
+        "reordered_target_first": {"batch_ids": reordered, "target_index": 0},
+    }
+
+
+def batch_vs_solo_drift(alone_result: dict[str, Any], batched_result: dict[str, Any]) -> dict[str, Any]:
+    """Same-engine comparison of one request's own top-k between running it
+    alone and running it co-batched, at every step where both conditions
+    still share the same generated prefix (a later step is only comparable
+    if the two conditions agree on every token up to it). `intersection_*`
+    metrics come from compare_top_k, so this reports no invented values
+    either. `high_drift` uses a fixed, stated 0.01 log-prob bound purely to
+    flag steps worth a human look in this diagnostic report -- it is not a
+    preregistered protocol threshold and must not be used as one."""
+    alone_tokens = alone_result["output_tokens"]
+    batched_tokens = batched_result["output_tokens"]
+    window = min(len(alone_tokens), len(batched_tokens))
+    steps = []
+    drift_detected = False
+    for position in range(window):
+        if alone_tokens[position] != batched_tokens[position]:
+            steps.append({"position": position, "prefix_diverged": True})
+            break
+        comparison = compare_top_k(alone_result["top_k"][position], batched_result["top_k"][position])
+        high_drift = (
+            comparison["intersection_max_abs_diff"] is not None and comparison["intersection_max_abs_diff"] > 0.01
+        )
+        drift_detected = drift_detected or high_drift
+        steps.append({"position": position, "prefix_diverged": False, "high_drift": high_drift, **comparison})
+    return {"drift_detected": drift_detected, "steps": steps}
+
+
+def analyze_audit_entry(variants: dict[str, dict[str, Any]], runs: dict[str, dict[str, Any]], epsilon: float) -> dict:
+    """Full diagnostic bundle for one audited request: per-variant
+    classification (under the corrected metrics and the already-committed
+    epsilon, for comparison against the original sealed verdict only -- not
+    to replace it), raw top-k, cross-request identity checks for every
+    batched variant, and batch-vs-solo drift for both engines."""
+    crashed = {name: r for name, r in runs.items() if r["crashed"]}
+    if crashed:
+        return {"crashed": crashed}
+
+    per_variant = {}
+    for variant_name, variant in variants.items():
+        target_index = variant["target_index"]
+        concurrency = 1 if variant_name == "alone" else len(variant["batch_ids"])
+        per_variant[variant_name] = {}
+        engine_targets: dict[str, dict[str, Any]] = {}
+        for implementation in ("custom", "vllm"):
+            batch = runs[f"{variant_name}_{implementation}"]["result"]["result"]
+            target_result = batch[target_index]
+            engine_targets[implementation] = target_result
+            identity_check = None
+            if variant_name != "alone":
+                others = [{"index": r["index"], "output_tokens": r["output_tokens"]} for r in batch]
+                identity_check = check_cross_request_identity(
+                    {"index": target_index, "output_tokens": target_result["output_tokens"]}, others
+                )
+            per_variant[variant_name][f"{implementation}_identity_check"] = identity_check
+            per_variant[variant_name][f"{implementation}_target"] = target_result
+        per_variant[variant_name]["classification"] = classify_request(
+            engine_targets["custom"], engine_targets["vllm"], epsilon=epsilon, concurrency=concurrency
+        )
+
+    return {
+        "per_variant": per_variant,
+        "batch_vs_solo_drift": {
+            implementation: batch_vs_solo_drift(
+                per_variant["alone"][f"{implementation}_target"],
+                per_variant["original"][f"{implementation}_target"],
+            )
+            for implementation in ("custom", "vllm")
+        },
+    }
+
+
+# --------------------------------------------------------------------------
 # Per-request first-disagreement diagnosis and classification (pure)
 # --------------------------------------------------------------------------
 
@@ -76,18 +189,25 @@ def first_disagreement(custom_result: dict[str, Any], vllm_result: dict[str, Any
         custom_top_k = custom_result["top_k"][position]
         vllm_top_k = vllm_result["top_k"][position]
         comparison = compare_top_k(custom_top_k, vllm_top_k)
+        cross_choice = cross_choice_diagnostics(
+            custom_top_k, vllm_top_k, custom_tokens[position], vllm_tokens[position]
+        )
         return {
             "position": position,
             "custom_token": custom_tokens[position],
             "vllm_token": vllm_tokens[position],
             "custom_margin": step_margin(custom_top_k),
             "vllm_margin": step_margin(vllm_top_k),
-            "max_abs_diff": comparison["max_abs_diff"],
-            "mean_abs_diff": comparison["mean_abs_diff"],
-            "cosine_similarity": comparison["cosine_similarity"],
             "top_k_overlap": comparison["top_k_overlap"],
+            "intersection_size": comparison["intersection_size"],
+            "intersection_max_abs_diff": comparison["intersection_max_abs_diff"],
+            "intersection_mean_abs_diff": comparison["intersection_mean_abs_diff"],
+            "intersection_cosine_similarity": comparison["intersection_cosine_similarity"],
             "custom_token_in_vllm_top_k": custom_tokens[position] in dict(vllm_top_k),
             "vllm_token_in_custom_top_k": vllm_tokens[position] in dict(custom_top_k),
+            "cross_choice": cross_choice,
+            "custom_top_k": custom_top_k,
+            "vllm_top_k": vllm_top_k,
         }
     return None
 
@@ -101,14 +221,29 @@ def classify_request(
     vllm_result: dict[str, Any],
     epsilon: float | None,
     concurrency: int = 2,
+    batch_vs_solo_drift: dict[str, Any] | None = None,
+    identity_check: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Per CORRECTNESS_PROTOCOL_V2.md requirements 1, 3 and 5. `epsilon` is
     None during calibration (classification is deferred until it's
     proposed); a committed float during holdout evaluation. `concurrency`
     defaults to 2 (i.e. "tolerance may apply") for standalone/test callers
     that don't track it; real callers must pass the request's actual
-    concurrency so a concurrency-1 disagreement is never tolerated."""
+    concurrency so a concurrency-1 disagreement is never tolerated.
+
+    `batch_vs_solo_drift` and `identity_check` are optional: requirement 5
+    lists batch-vs-solo logit drift and cross-request identity/KV corruption
+    as hard-failure conditions, but neither was previously computed by any
+    caller, so the already-executed sealed holdout never checked for them.
+    They default to None (not checked) so this function's behavior is
+    unchanged for any already-collected result that doesn't have this data;
+    passing them in is how a new (V3) run actually enforces requirement 5's
+    full list instead of just the subset checked so far."""
     reasons: list[str] = []
+    if batch_vs_solo_drift is not None and batch_vs_solo_drift.get("drift_detected"):
+        reasons.append("batch_vs_solo_drift")
+    if identity_check is not None and identity_check.get("contamination_suspected"):
+        reasons.append("cross_request_identity_or_kv_corruption")
     if not custom_result["verified"]:
         reasons.append("custom_disagrees_with_own_top_k")
     if not vllm_result["verified"]:

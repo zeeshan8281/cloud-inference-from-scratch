@@ -11,8 +11,12 @@ import math
 import unittest
 
 from experiments.protocol_v2 import (
+    AUDIT_TARGETS,
     V2_BATCHES_PER_CELL,
     V2_CELLS,
+    analyze_audit_entry,
+    batch_vs_solo_drift,
+    build_audit_variants,
     build_split_batches,
     classify_request,
     first_disagreement,
@@ -60,6 +64,108 @@ class TestSplitBatches(unittest.TestCase):
     def test_rejects_unknown_split(self) -> None:
         with self.assertRaises(ValueError):
             build_split_batches(FakeTokenizer(), "test")
+
+
+class TestAuditVariants(unittest.TestCase):
+    def test_variants_reconstruct_the_exact_flagged_holdout_requests(self) -> None:
+        tokenizer = FakeTokenizer()
+        holdout = build_split_batches(tokenizer, "holdout")
+        for target in AUDIT_TARGETS:
+            original_batch = holdout[target["cell"]][target["batch_index"]]
+            target_ids = original_batch[target["index_in_batch"]]
+            variants = build_audit_variants(tokenizer, target)
+            self.assertEqual(variants["alone"]["batch_ids"], [target_ids])
+            self.assertEqual(variants["original"]["batch_ids"], original_batch)
+            self.assertEqual(variants["original"]["target_index"], target["index_in_batch"])
+            self.assertEqual(variants["reordered_target_first"]["batch_ids"][0], target_ids)
+            self.assertEqual(variants["reordered_target_first"]["target_index"], 0)
+            self.assertEqual(
+                set(map(tuple, variants["reordered_target_first"]["batch_ids"])),
+                set(map(tuple, original_batch)),
+            )
+
+
+class TestBatchVsSoloDrift(unittest.TestCase):
+    def test_identical_top_k_between_alone_and_batched_is_no_drift(self) -> None:
+        top_k = [[(1, -0.1), (2, -1.0)], [(2, -0.2), (3, -1.0)]]
+        alone = _result([1, 2], top_k)
+        batched = _result([1, 2], top_k)
+        result = batch_vs_solo_drift(alone, batched)
+        self.assertFalse(result["drift_detected"])
+        self.assertEqual(len(result["steps"]), 2)
+
+    def test_large_logprob_difference_at_a_shared_prefix_step_is_flagged(self) -> None:
+        alone = _result([1], [[(1, -0.1), (2, -1.0)]])
+        batched = _result([1], [[(1, -5.0), (2, -1.0)]])
+        result = batch_vs_solo_drift(alone, batched)
+        self.assertTrue(result["drift_detected"])
+        self.assertTrue(result["steps"][0]["high_drift"])
+
+    def test_stops_comparing_once_the_prefix_diverges(self) -> None:
+        alone = _result([1, 2], [[(1, -0.1)], [(2, -0.1)]])
+        batched = _result([1, 9], [[(1, -0.1)], [(9, -0.1)]])
+        result = batch_vs_solo_drift(alone, batched)
+        self.assertEqual(len(result["steps"]), 2)
+        self.assertTrue(result["steps"][1]["prefix_diverged"])
+
+
+class TestAnalyzeAuditEntry(unittest.TestCase):
+    def _child(self, result: list[dict]) -> dict:
+        return {"crashed": False, "result": {"result": result}}
+
+    def test_reports_crash_without_analyzing(self) -> None:
+        runs = {"alone_custom": {"crashed": True, "stderr_tail": "boom"}}
+        result = analyze_audit_entry({}, runs, epsilon=0.01)
+        self.assertIn("alone_custom", result["crashed"])
+
+    def test_full_analysis_covers_every_variant_and_both_drift_engines(self) -> None:
+        custom_r0 = {"index": 0, "output_tokens": [1], "top_k": [[(1, -0.01), (2, -1.0)]], "verified": True}
+        vllm_r0 = {"index": 0, "output_tokens": [1], "top_k": [[(1, -0.02), (2, -1.1)]], "verified": True}
+        custom_others = [{"index": 1, "output_tokens": [5], "top_k": [[(5, -0.1)]], "verified": True}]
+        vllm_others = [{"index": 1, "output_tokens": [5], "top_k": [[(5, -0.1)]], "verified": True}]
+        variants = {
+            "alone": {"batch_ids": [[100]], "target_index": 0},
+            "original": {"batch_ids": [[100], [200]], "target_index": 0},
+            "reordered_target_first": {"batch_ids": [[100], [200]], "target_index": 0},
+        }
+        runs = {
+            "alone_custom": self._child([custom_r0]),
+            "alone_vllm": self._child([vllm_r0]),
+            "original_custom": self._child([custom_r0, *custom_others]),
+            "original_vllm": self._child([vllm_r0, *vllm_others]),
+            "reordered_target_first_custom": self._child([custom_r0, *custom_others]),
+            "reordered_target_first_vllm": self._child([vllm_r0, *vllm_others]),
+        }
+        result = analyze_audit_entry(variants, runs, epsilon=0.05)
+        self.assertEqual(set(result["per_variant"]), {"alone", "original", "reordered_target_first"})
+        self.assertIsNone(result["per_variant"]["alone"]["custom_identity_check"])
+        self.assertIsNotNone(result["per_variant"]["original"]["custom_identity_check"])
+        self.assertFalse(result["per_variant"]["original"]["custom_identity_check"]["contamination_suspected"])
+        self.assertIn("custom", result["batch_vs_solo_drift"])
+        self.assertIn("vllm", result["batch_vs_solo_drift"])
+        self.assertEqual(result["per_variant"]["alone"]["classification"]["verdict"], "exact_match")
+
+    def test_identical_outputs_across_distinct_batch_members_flags_contamination(self) -> None:
+        custom_r0 = {"index": 0, "output_tokens": [1, 2], "top_k": [[(1, -0.01)], [(2, -0.01)]], "verified": True}
+        contaminated = {"index": 1, "output_tokens": [1, 2], "top_k": [[(1, -0.01)], [(2, -0.01)]], "verified": True}
+        vllm_r0 = {"index": 0, "output_tokens": [1, 2], "top_k": [[(1, -0.01)], [(2, -0.01)]], "verified": True}
+        vllm_r1 = {"index": 1, "output_tokens": [9, 9], "top_k": [[(9, -0.01)], [(9, -0.01)]], "verified": True}
+        variants = {
+            "alone": {"batch_ids": [[100]], "target_index": 0},
+            "original": {"batch_ids": [[100], [200]], "target_index": 0},
+            "reordered_target_first": {"batch_ids": [[100], [200]], "target_index": 0},
+        }
+        runs = {
+            "alone_custom": self._child([custom_r0]),
+            "alone_vllm": self._child([vllm_r0]),
+            "original_custom": self._child([custom_r0, contaminated]),
+            "original_vllm": self._child([vllm_r0, vllm_r1]),
+            "reordered_target_first_custom": self._child([custom_r0, contaminated]),
+            "reordered_target_first_vllm": self._child([vllm_r0, vllm_r1]),
+        }
+        result = analyze_audit_entry(variants, runs, epsilon=0.05)
+        self.assertTrue(result["per_variant"]["original"]["custom_identity_check"]["contamination_suspected"])
+        self.assertFalse(result["per_variant"]["original"]["vllm_identity_check"]["contamination_suspected"])
 
 
 class TestFirstDisagreement(unittest.TestCase):
@@ -167,6 +273,31 @@ class TestClassifyRequest(unittest.TestCase):
         result = classify_request(custom, vllm, epsilon=1.0, concurrency=1)
         self.assertEqual(result["verdict"], "hard_failure")
         self.assertIn("disagreement_at_concurrency_one", result["reasons"])
+
+    def test_batch_vs_solo_drift_is_a_hard_failure_when_flagged(self) -> None:
+        custom = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
+        vllm = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
+        result = classify_request(
+            custom, vllm, epsilon=0.05, batch_vs_solo_drift={"drift_detected": True}
+        )
+        self.assertEqual(result["verdict"], "hard_failure")
+        self.assertIn("batch_vs_solo_drift", result["reasons"])
+
+    def test_identity_check_contamination_is_a_hard_failure_when_flagged(self) -> None:
+        custom = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
+        vllm = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
+        result = classify_request(
+            custom, vllm, epsilon=0.05, identity_check={"contamination_suspected": True, "matching_indices": [2]}
+        )
+        self.assertEqual(result["verdict"], "hard_failure")
+        self.assertIn("cross_request_identity_or_kv_corruption", result["reasons"])
+
+    def test_absent_drift_and_identity_checks_do_not_change_prior_behavior(self) -> None:
+        custom = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
+        vllm = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
+        result = classify_request(custom, vllm, epsilon=0.05)
+        self.assertEqual(result["verdict"], "exact_match")
+        self.assertEqual(result["reasons"], [])
 
 
 class TestProposeEpsilon(unittest.TestCase):

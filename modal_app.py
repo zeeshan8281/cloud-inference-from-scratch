@@ -2287,6 +2287,80 @@ def protocol_v2_holdout(
     )
 
 
+@app.function(
+    image=sentinel_image,
+    gpu=MODAL_CFG["gpu"],
+    volumes={"/cache": volume},
+    timeout=3600,
+    max_containers=1,
+)
+def _protocol_v2_audit() -> dict:
+    """Bounded audit of the two Protocol V2 sealed-holdout hard failures
+    (CORRECTNESS_PROTOCOL_V2.md audit instructions). Diagnostic only: reruns
+    only these two already-inspected requests (no longer validation data),
+    each alone/original-position/reordered-target-first, for both engines.
+    Does NOT change the sealed holdout verdict -- that remains 2 hard
+    failures, gate does not pass, as originally preregistered."""
+    from transformers import AutoTokenizer
+
+    from experiments.protocol_v2 import AUDIT_TARGETS, build_audit_variants
+
+    _print_run_header("correctness protocol v2 audit (diagnostic only)")
+    model_dir = _prepare_weights(RAGGED_MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+
+    workdir = Path(tempfile.mkdtemp(prefix="protocol-v2-audit-"))
+    entries = {}
+    for target in AUDIT_TARGETS:
+        target_key = f"{target['cell']}-b{target['batch_index']}-i{target['index_in_batch']}"
+        variants = build_audit_variants(tokenizer, target)
+        runs = {}
+        for variant_name, variant in variants.items():
+            for implementation in ("custom", "vllm"):
+                config = {
+                    "implementation": implementation,
+                    "model_dir": model_dir,
+                    "batch_ids": variant["batch_ids"],
+                    "engine_options": {},
+                }
+                name = f"{target_key}_{variant_name}_{implementation}"
+                runs[f"{variant_name}_{implementation}"] = _run_protocol_v2_child(config, workdir / name)
+        entries[target_key] = {"target": target, "variants": variants, "runs": runs}
+    return entries
+
+
+@app.local_entrypoint()
+def protocol_v2_audit(
+    epsilon: float = 0.012599945068359375,
+    output: str = "experiments/sentinel-pilot/summaries/protocol-v2-audit.json",
+) -> None:
+    """Bounded diagnostic audit of the two Protocol V2 sealed-holdout hard
+    failures. Does not resume the 10-pair performance protocol and does not
+    modify the committed holdout verdict -- see CORRECTNESS_PROTOCOL_V2.md
+    and CORRECTNESS_PROTOCOL_V3.md."""
+    from experiments.protocol_v2 import analyze_audit_entry
+
+    entries = _protocol_v2_audit.remote()
+    analyzed = {key: analyze_audit_entry(entry["variants"], entry["runs"], epsilon) for key, entry in entries.items()}
+    result = {"epsilon_used_for_comparison": epsilon, "raw": entries, "analysis": analyzed}
+    destination = Path(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(result, indent=2))
+    print(f"audit written to {destination}")
+    for key, entry in analyzed.items():
+        if "crashed" in entry:
+            print(f"{key}: CRASHED: {list(entry['crashed'])}")
+            continue
+        for variant_name, variant in entry["per_variant"].items():
+            print(f"{key} [{variant_name}]: verdict={variant['classification']['verdict']}")
+        for implementation, drift in entry["batch_vs_solo_drift"].items():
+            print(f"{key} {implementation} batch-vs-solo drift_detected={drift['drift_detected']}")
+    print(
+        "This is a diagnostic re-examination only. The sealed Protocol V2 "
+        "holdout verdict (2 hard failures, gate does not pass) is unchanged."
+    )
+
+
 @app.local_entrypoint()
 def main(command: str = "help") -> None:
     commands = {

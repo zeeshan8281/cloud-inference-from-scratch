@@ -106,30 +106,99 @@ def step_margin(top_k: list[tuple[int, float]]) -> float | None:
 
 
 def compare_top_k(a: list[tuple[int, float]], b: list[tuple[int, float]]) -> dict[str, Any]:
-    """Metrics over the union of two top-k lists' token IDs. Neither engine's
-    public API exposes the full ~150k-wide vocabulary logit vector in all
-    three cases (vLLM's SamplingParams only returns its own top-k), so every
-    cross-engine comparison in this diagnostic uses this restricted support,
-    applied uniformly for comparability."""
+    """Metrics over two top-k lists' token IDs.
+
+    Earlier version of this function imputed a missing token's log-prob as
+    `min(present values) - 10` and computed max/mean abs diff and cosine
+    similarity over the union with that invented floor. Any token present in
+    one list but not the other then contributed a ~10 log-prob "difference"
+    regardless of the lists' actual similarity -- with TOP_K=20, losing even
+    one of twenty tokens from the intersection was enough to make
+    max_abs_diff look like a large distributional difference when it was
+    measuring the floor, not the distributions. Fixed: every metric here is
+    computed only over tokens that actually appear in *both* lists; neither
+    engine's public API exposes the full ~150k-wide vocabulary logit vector,
+    and inventing a value for a token neither side reported is not honest
+    evidence about it. `top_k_overlap` (unaffected by the bug -- it never
+    used the floor) is reported separately as the measure of how much
+    intersection-based metrics below are actually built on."""
     a_map = dict(a)
     b_map = dict(b)
-    union = sorted(set(a_map) | set(b_map))
-    floor_a = (min(a_map.values()) - 10) if a_map else -100.0
-    floor_b = (min(b_map.values()) - 10) if b_map else -100.0
-    va = [a_map.get(t, floor_a) for t in union]
-    vb = [b_map.get(t, floor_b) for t in union]
-    diffs = [abs(x - y) for x, y in zip(va, vb, strict=True)]
-    dot = sum(x * y for x, y in zip(va, vb, strict=True))
-    norm_a = math.sqrt(sum(x * x for x in va))
-    norm_b = math.sqrt(sum(y * y for y in vb))
+    shared = sorted(set(a_map) & set(b_map))
+    diffs = [abs(a_map[token_id] - b_map[token_id]) for token_id in shared]
+    a_values = [a_map[token_id] for token_id in shared]
+    b_values = [b_map[token_id] for token_id in shared]
+    dot = sum(x * y for x, y in zip(a_values, b_values, strict=True))
+    norm_a = math.sqrt(sum(x * x for x in a_values))
+    norm_b = math.sqrt(sum(y * y for y in b_values))
     cosine = dot / (norm_a * norm_b) if norm_a and norm_b else None
-    overlap = len(set(a_map) & set(b_map)) / TOP_K
     return {
-        "max_abs_diff": max(diffs) if diffs else None,
-        "mean_abs_diff": sum(diffs) / len(diffs) if diffs else None,
-        "cosine_similarity": cosine,
-        "top_k_overlap": overlap,
+        "top_k_overlap": len(shared) / TOP_K,
+        "intersection_size": len(shared),
+        "intersection_max_abs_diff": max(diffs) if diffs else None,
+        "intersection_mean_abs_diff": sum(diffs) / len(diffs) if diffs else None,
+        "intersection_cosine_similarity": cosine,
     }
+
+
+def cross_choice_diagnostics(
+    custom_top_k: list[tuple[int, float]],
+    vllm_top_k: list[tuple[int, float]],
+    custom_token: int,
+    vllm_token: int,
+) -> dict[str, Any]:
+    """Exact cross-engine margins and ranks at a disagreement, per
+    CORRECTNESS_PROTOCOL_V2.md's audit requirements. Every value is either a
+    real number read directly off one engine's own top-k list, or `None`
+    ("unavailable") when the needed token simply isn't in that list --
+    never an invented substitute."""
+    custom_map = dict(custom_top_k)
+    vllm_map = dict(vllm_top_k)
+    custom_ranked_ids = [token_id for token_id, _ in custom_top_k]
+    vllm_ranked_ids = [token_id for token_id, _ in vllm_top_k]
+
+    def rank_of(token_id: int, ranked_ids: list[int]) -> int | None:
+        return ranked_ids.index(token_id) + 1 if token_id in ranked_ids else None
+
+    logp_custom_own = custom_map.get(custom_token)
+    logp_custom_at_vllm_choice = custom_map.get(vllm_token)
+    logp_vllm_own = vllm_map.get(vllm_token)
+    logp_vllm_at_custom_choice = vllm_map.get(custom_token)
+    return {
+        "logp_custom_at_custom_choice": logp_custom_own,
+        "logp_custom_at_vllm_choice": logp_custom_at_vllm_choice,
+        "custom_cross_margin": (
+            logp_custom_own - logp_custom_at_vllm_choice
+            if logp_custom_own is not None and logp_custom_at_vllm_choice is not None
+            else None
+        ),
+        "logp_vllm_at_vllm_choice": logp_vllm_own,
+        "logp_vllm_at_custom_choice": logp_vllm_at_custom_choice,
+        "vllm_cross_margin": (
+            logp_vllm_own - logp_vllm_at_custom_choice
+            if logp_vllm_own is not None and logp_vllm_at_custom_choice is not None
+            else None
+        ),
+        "vllm_choice_rank_in_custom": rank_of(vllm_token, custom_ranked_ids),
+        "custom_choice_rank_in_vllm": rank_of(custom_token, vllm_ranked_ids),
+    }
+
+
+def check_cross_request_identity(
+    target_result: dict[str, Any], other_results_in_batch: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Request-identity / KV-isolation check. Prompts are seed-derived,
+    disjoint, high-entropy text, so two independent greedy generations
+    landing on the exact same output token sequence by coincidence is not a
+    plausible explanation -- a match indicates content leaking between
+    requests (e.g. a KV-block/allocator bug), not chance."""
+    target_tokens = tuple(target_result["output_tokens"])
+    matches = [
+        other["index"]
+        for other in other_results_in_batch
+        if other["index"] != target_result["index"] and tuple(other["output_tokens"]) == target_tokens
+    ]
+    return {"contamination_suspected": bool(matches), "matching_indices": matches}
 
 
 def classify_divergence(
