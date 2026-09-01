@@ -117,6 +117,10 @@ def batch_vs_solo_drift(alone_result: dict[str, Any], batched_result: dict[str, 
     drift_detected = False
     for position in range(window):
         if alone_tokens[position] != batched_tokens[position]:
+            # The request's own output token changed depending on whether it
+            # ran alone or co-batched -- a stronger signal than any log-prob
+            # magnitude threshold below, so this always counts as drift.
+            drift_detected = True
             steps.append({"position": position, "prefix_diverged": True})
             break
         comparison = compare_top_k(alone_result["top_k"][position], batched_result["top_k"][position])

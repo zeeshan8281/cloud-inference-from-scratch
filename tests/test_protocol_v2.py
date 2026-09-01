@@ -101,12 +101,13 @@ class TestBatchVsSoloDrift(unittest.TestCase):
         self.assertTrue(result["drift_detected"])
         self.assertTrue(result["steps"][0]["high_drift"])
 
-    def test_stops_comparing_once_the_prefix_diverges(self) -> None:
+    def test_prefix_divergence_itself_counts_as_drift_and_stops_comparison(self) -> None:
         alone = _result([1, 2], [[(1, -0.1)], [(2, -0.1)]])
         batched = _result([1, 9], [[(1, -0.1)], [(9, -0.1)]])
         result = batch_vs_solo_drift(alone, batched)
         self.assertEqual(len(result["steps"]), 2)
         self.assertTrue(result["steps"][1]["prefix_diverged"])
+        self.assertTrue(result["drift_detected"])
 
 
 class TestAnalyzeAuditEntry(unittest.TestCase):
