@@ -374,18 +374,23 @@ def main() -> None:
     model_dir = config["model_dir"]
     implementation = config["implementation"]
     engine_options = config.get("engine_options", {})
-    batches = config["batches"]  # list of batch_ids (list[list[int]])
+    batch_ids = config["batch_ids"]  # exactly one batch: list[list[int]]
 
+    # One batch per process, deliberately: an earlier version ran multiple
+    # engine constructions in a loop inside one process (like
+    # sentinel_diagnostics.py's original self-consistency-check bug) and hit
+    # a real CUDA OOM after a couple of iterations -- PyTorch's allocator did
+    # not return the prior engine's KV cache and weights before the next
+    # engine tried to allocate. Fresh subprocess per batch sidesteps that
+    # entirely, matching the pattern already used elsewhere in this repo.
     if implementation == "custom":
-        batch_results = [
-            asyncio.run(run_custom_full_batch(model_dir, engine_options, batch)) for batch in batches
-        ]
+        result = asyncio.run(run_custom_full_batch(model_dir, engine_options, batch_ids))
     elif implementation == "vllm":
-        batch_results = [run_vllm_full_batch(model_dir, model, engine_options, batch) for batch in batches]
+        result = run_vllm_full_batch(model_dir, model, engine_options, batch_ids)
     else:
         raise SystemExit(f"unknown implementation: {implementation}")
 
-    output_path.write_text(json.dumps({"config": config, "batch_results": batch_results}, indent=2))
+    output_path.write_text(json.dumps({"config": config, "result": result}, indent=2))
 
 
 if __name__ == "__main__":

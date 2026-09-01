@@ -2186,18 +2186,23 @@ def _protocol_v2_run(split: str, epsilon: float | None) -> dict:
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
     batches_by_cell = build_split_batches(tokenizer, split)
 
+    # One fresh subprocess per (implementation, cell, batch) -- not one
+    # subprocess looping over several engine constructions, which hit a real
+    # CUDA OOM after a couple of iterations (PyTorch's allocator did not
+    # return the prior engine's memory before the next one allocated).
     workdir = Path(tempfile.mkdtemp(prefix=f"protocol-v2-{split}-"))
     child_results: dict[str, dict] = {}
     for implementation in ("custom", "vllm"):
         for cell in V2_CELLS:
-            config = {
-                "implementation": implementation,
-                "model_dir": model_dir,
-                "batches": batches_by_cell[cell.name],
-                "engine_options": {},
-            }
-            name = f"{implementation}_{cell.name}"
-            child_results[name] = _run_protocol_v2_child(config, workdir / name)
+            for batch_index, batch_ids in enumerate(batches_by_cell[cell.name]):
+                config = {
+                    "implementation": implementation,
+                    "model_dir": model_dir,
+                    "batch_ids": batch_ids,
+                    "engine_options": {},
+                }
+                name = f"{implementation}_{cell.name}_{batch_index}"
+                child_results[name] = _run_protocol_v2_child(config, workdir / name)
 
     crashed = {name: child for name, child in child_results.items() if child["crashed"]}
     if crashed:
@@ -2205,9 +2210,10 @@ def _protocol_v2_run(split: str, epsilon: float | None) -> dict:
 
     classifications = []
     for cell in V2_CELLS:
-        custom_batches = child_results[f"custom_{cell.name}"]["result"]["batch_results"]
-        vllm_batches = child_results[f"vllm_{cell.name}"]["result"]["batch_results"]
-        for batch_index, (custom_batch, vllm_batch) in enumerate(zip(custom_batches, vllm_batches, strict=True)):
+        num_batches = len(batches_by_cell[cell.name])
+        for batch_index in range(num_batches):
+            custom_batch = child_results[f"custom_{cell.name}_{batch_index}"]["result"]["result"]
+            vllm_batch = child_results[f"vllm_{cell.name}_{batch_index}"]["result"]["result"]
             for custom_request, vllm_request in zip(custom_batch, vllm_batch, strict=True):
                 entry = classify_request(custom_request, vllm_request, epsilon, concurrency=cell.concurrency)
                 entry["cell"] = cell.name
