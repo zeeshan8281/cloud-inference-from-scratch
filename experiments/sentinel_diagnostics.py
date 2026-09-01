@@ -263,7 +263,11 @@ async def run_custom_diagnostic(
         runner._graph_forward = original_graph_forward
         await engine.close()
 
-    target_id = f"diag-{target_index}"
+    # Scheduler.submit's first parameter is `prompt` (a free-text label), not
+    # a request ID -- the real ID is auto-generated internally as
+    # req-{counter:08d}. Read it off the actual Request object rather than
+    # guessing the string, which is what silently caused zero attributions.
+    target_id = requests[target_index].request_id
     target_tokens = list(requests[target_index].generated_token_ids)[:STEPS]
     per_step_top_k = []
     for pack, logits in zip(captured_packs, captured_logits, strict=True):
