@@ -44,6 +44,7 @@ class EngineConfig:
     block_size: int
     kv_cache_bytes: int
     prefix_cache_max_blocks: int
+    use_triton_attention: bool = True
     allow_reference_fallback: bool = False
 
 
@@ -101,6 +102,7 @@ def build_config(
         block_size=kv["block_size"],
         kv_cache_bytes=kv["bytes"],
         prefix_cache_max_blocks=kv.get("prefix_cache_max_blocks", 0),
+        use_triton_attention=True,
     )
     unknown = set(overrides) - set(values) - {"allow_reference_fallback"}
     if unknown:

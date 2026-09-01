@@ -1,0 +1,55 @@
+flowchart LR
+  clients["Clients<br/>Operator console · cie CLI · SDK · AIPerf<br/>Blocking JSON or ordered SSE"]
+
+  subgraph control["Control plane and HTTP contract"]
+    ingress["Modal HTTPS ingress<br/>64 KiB body cap · request ID<br/>/livez · /readyz · /v1/models"]
+    auth["FastAPI contract<br/>Bearer auth · tenant policy<br/>model/input validation · greedy only"]
+    admission["Admission control<br/>Concurrency lease + 60 s token window<br/>In-process at 1 replica · Redis Lua at 2–4<br/>Fail closed when shared state is unavailable"]
+    response["Response lifecycle<br/>Blocking object or SSE event sequence<br/>Backpressure · timeout · cancellation<br/>Terminal cleanup releases every lease"]
+  end
+
+  subgraph modal["Modal deployment: 1–4 replicas, one NVIDIA L4 per replica"]
+    replica["Replica lifecycle<br/>0 min containers · 60 s scale-down<br/>32 container inputs · 1,200 s timeout<br/>Readiness waits for model + graph warmup"]
+    scheduler["Decode-first scheduler<br/>64 queued · 16 active sequences<br/>2,048-token iteration budget<br/>256-token chunked prefill · recompute preemption"]
+    packer["BatchPlan → PackedBatch<br/>Flat token axis · positions · sequence offsets<br/>block tables · slot mappings · selected logits<br/>Multiple request IDs in one model invocation"]
+    model["Pinned Qwen2.5-3B transformer<br/>FP16 default · optional MLP-only LLM.int8<br/>Greedy decode · max 4,096 context<br/>No model-specific chat-template rendering"]
+    attention["Ragged paged attention<br/>Torch oracle + Triton L4 kernel<br/>Mixed decode and chunked prefill<br/>Head dims 64/128 · contexts through 4,002"]
+    graphs["CUDA Graph decode<br/>Buckets 1 / 2 / 4 / 8 / 16<br/>Other live batches pad to next bucket<br/>Pre-captured before readiness"]
+    kv["Demand-paged KV memory<br/>4 GiB pool · 16-token physical blocks<br/>Transactional growth · ownership invariants<br/>Block tables avoid contiguous per-request cache"]
+    prefix["Bounded prefix cache<br/>Block-aligned prompt reuse · 256-block cap<br/>Final prompt token recomputed for parity<br/>LRU eviction returns blocks to shared pool"]
+  end
+
+  redis[("TLS Redis<br/>Atomic Lua admission<br/>Cross-replica leases + quotas")]
+  volume[("Modal Volume<br/>Pinned model snapshots<br/>~6 GB 3B weights + compiled artifacts")]
+  telemetry["Evidence and observability<br/>JSON + Prometheus metrics · prompt-free audit logs<br/>TTFT / ITL / E2E / tok-s / queue / KV / preemption<br/>HF oracle · AIPerf · reliability · Nsight artifacts"]
+
+  clients -->|HTTPS| ingress
+  ingress --> auth --> admission
+  admission <-->|ENGINE_MAX_CONTAINERS > 1| redis
+  admission -->|admitted request + lease| replica
+  volume -->|load pinned snapshot| replica
+  replica --> scheduler --> packer --> model
+  packer -->|ragged metadata| attention
+  model -->|Q/K/V + logits| attention
+  scheduler -->|allocate / free / preempt| kv
+  prefix <-->|copy-on-hit / retain-on-complete| kv
+  packer -->|decode-only static shapes| graphs
+  graphs --> model
+  model -->|token IDs| scheduler
+  scheduler --> response -->|JSON or SSE| clients
+  auth -.->|redacted counters| telemetry
+  scheduler -.->|runtime gauges + latency| telemetry
+  kv -.->|utilization + cache hits| telemetry
+
+  classDef client fill:#f8f9fa,stroke:#212529,color:#212529,stroke-width:2px;
+  classDef control fill:#e7f5ff,stroke:#1971c2,color:#0b3d66,stroke-width:2px;
+  classDef compute fill:#f3f0ff,stroke:#6741d9,color:#3b2b7a,stroke-width:2px;
+  classDef memory fill:#e6fcf5,stroke:#087f5b,color:#064f3c,stroke-width:2px;
+  classDef external fill:#fff4e6,stroke:#d9480f,color:#7f2704,stroke-width:2px;
+  classDef proof fill:#fff9db,stroke:#e67700,color:#7a3e00,stroke-width:2px;
+  class clients client;
+  class ingress,auth,admission,response control;
+  class replica,scheduler,packer,model,attention,graphs compute;
+  class kv,prefix memory;
+  class redis,volume external;
+  class telemetry proof;

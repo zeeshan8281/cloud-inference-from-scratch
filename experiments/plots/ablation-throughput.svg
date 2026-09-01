@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="520" viewBox="0 0 1100 520">
+<rect width="100%" height="100%" fill="white"/>
+<text x="550.0" y="30" text-anchor="middle" font-family="sans-serif" font-size="20">Median throughput ratio over failure-free cells</text>
+<line x1="80" y1="60" x2="80" y2="410" stroke="#333"/>
+<line x1="80" y1="410" x2="1070" y2="410" stroke="#333"/>
+<rect x="179.0" y="60.0" width="196.0" height="350.0" fill="#2563eb"/>
+<rect x="80" y="485" width="14" height="14" fill="#2563eb"/>
+<text x="100" y="497" font-family="sans-serif" font-size="13">no_continuous_batching</text>
+<rect x="377.0" y="140.2" width="196.0" height="269.8" fill="#f97316"/>
+<rect x="270" y="485" width="14" height="14" fill="#f97316"/>
+<text x="290" y="497" font-family="sans-serif" font-size="13">no_cuda_graph</text>
+<rect x="575.0" y="78.4" width="196.0" height="331.6" fill="#16a34a"/>
+<rect x="460" y="485" width="14" height="14" fill="#16a34a"/>
+<text x="480" y="497" font-family="sans-serif" font-size="13">no_prefix_reuse</text>
+<rect x="773.0" y="314.2" width="196.0" height="95.8" fill="#9333ea"/>
+<rect x="650" y="485" width="14" height="14" fill="#9333ea"/>
+<text x="670" y="497" font-family="sans-serif" font-size="13">no_triton</text>
+<text x="575.0" y="428" transform="rotate(35 575.0 428)" font-family="sans-serif" font-size="11">median across 9 cells</text>
+</svg>

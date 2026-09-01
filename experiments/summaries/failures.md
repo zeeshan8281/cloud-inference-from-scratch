@@ -1,0 +1,31 @@
+# Failed and timed-out requests
+
+- `raw/custom-server/complete-restart-1.json`: no request failures or timeouts.
+- `raw/custom-server/complete-restart-2.json`: no request failures or timeouts.
+- `raw/custom-server/complete-restart-3.json`: no request failures or timeouts.
+- `raw/custom-server/no_continuous_batching-restart-1.json` / `in128-out128-c32`: 20 errors, 20 timeouts; timed_out.
+- `raw/custom-server/no_continuous_batching-restart-1.json` / `in512-out128-c32`: 20 errors, 20 timeouts; timed_out.
+- `raw/custom-server/no_continuous_batching-restart-1.json` / `in1024-out256-c8`: 3 errors, 3 timeouts; timed_out.
+- `raw/custom-server/no_continuous_batching-restart-1.json` / `in1024-out256-c32`: 26 errors, 26 timeouts; timed_out.
+- `raw/custom-server/no_continuous_batching-restart-2.json` / `in128-out128-c32`: 20 errors, 20 timeouts; timed_out.
+- `raw/custom-server/no_continuous_batching-restart-2.json` / `in512-out128-c32`: 20 errors, 20 timeouts; timed_out.
+- `raw/custom-server/no_continuous_batching-restart-2.json` / `in1024-out256-c8`: 3 errors, 3 timeouts; timed_out.
+- `raw/custom-server/no_continuous_batching-restart-2.json` / `in1024-out256-c32`: 26 errors, 26 timeouts; timed_out.
+- `raw/custom-server/no_continuous_batching-restart-3.json` / `in128-out128-c32`: 20 errors, 20 timeouts; timed_out.
+- `raw/custom-server/no_continuous_batching-restart-3.json` / `in512-out128-c32`: 20 errors, 20 timeouts; timed_out.
+- `raw/custom-server/no_continuous_batching-restart-3.json` / `in1024-out256-c8`: 3 errors, 3 timeouts; timed_out.
+- `raw/custom-server/no_continuous_batching-restart-3.json` / `in1024-out256-c32`: 26 errors, 26 timeouts; timed_out.
+- `raw/custom-server/no_cuda_graph-restart-1.json`: no request failures or timeouts.
+- `raw/custom-server/no_cuda_graph-restart-2.json`: no request failures or timeouts.
+- `raw/custom-server/no_cuda_graph-restart-3.json`: no request failures or timeouts.
+- `raw/custom-server/no_cuda_graph-restart-4.json`: no request failures or timeouts.
+- `raw/custom-server/no_cuda_graph-restart-5.json`: no request failures or timeouts.
+- `raw/custom-server/no_prefix_reuse-restart-1.json`: no request failures or timeouts.
+- `raw/custom-server/no_prefix_reuse-restart-2.json`: no request failures or timeouts.
+- `raw/custom-server/no_prefix_reuse-restart-3.json`: no request failures or timeouts.
+- `raw/custom-server/no_triton-restart-1.json` / `in1024-out256-c32`: 16 errors, 16 timeouts; timed_out.
+- `raw/custom-server/no_triton-restart-2.json` / `in1024-out256-c32`: 16 errors, 16 timeouts; timed_out.
+- `raw/custom-server/no_triton-restart-3.json` / `in1024-out256-c32`: 16 errors, 16 timeouts; timed_out.
+- `raw/vllm/complete-restart-1.json`: no request failures or timeouts.
+- `raw/vllm/complete-restart-2.json`: no request failures or timeouts.
+- `raw/vllm/complete-restart-3.json`: no request failures or timeouts.

@@ -10,10 +10,13 @@ on deploy. Every GPU command prints a billable-compute reminder.
 
 from __future__ import annotations
 
+import csv
 import json
 import os
+import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from hashlib import sha256
 from pathlib import Path
@@ -61,6 +64,9 @@ def _source_commit() -> str:
         experiment_runner = Path(__file__).parent / "experiment.py"
         if experiment_runner.is_file():
             paths.append(experiment_runner)
+        controlled_runner = Path(__file__).parent / "experiments/controlled.py"
+        if controlled_runner.is_file():
+            paths.append(controlled_runner)
         for directory in ("src", "benchmarks", "tests"):
             paths.extend(sorted((Path(__file__).parent / directory).rglob("*.py")))
         for path in paths:
@@ -98,6 +104,11 @@ image = (
     .add_local_dir(
         Path(__file__).parent / "benchmarks",
         "/root/benchmarks",
+        copy=True,
+    )
+    .add_local_file(
+        Path(__file__).parent / "experiments/controlled.py",
+        "/root/experiments/controlled.py",
         copy=True,
     )
     .add_local_dir(
@@ -169,6 +180,11 @@ vllm_image = (
     .add_local_dir(
         Path(__file__).parent / "benchmarks",
         "/root/benchmarks",
+        copy=True,
+    )
+    .add_local_file(
+        Path(__file__).parent / "experiments/controlled.py",
+        "/root/experiments/controlled.py",
         copy=True,
     )
     .add_local_file(
@@ -1082,6 +1098,262 @@ def online_ragged(
     result["ragged"] = ragged
     destination.write_text(json.dumps(result, indent=2))
     print(f"ragged comparison JSON updated at {destination}")
+
+
+def _controlled_child(implementation: str, operation: str, variant: str) -> dict:
+    model_dir = _prepare_weights(RAGGED_MODEL)
+    output = Path(tempfile.mkdtemp(prefix="controlled-")) / "result.json"
+    subprocess.run(
+        [
+            sys.executable,
+            "/root/experiments/controlled.py",
+            implementation,
+            operation,
+            variant,
+            model_dir,
+            str(output),
+        ],
+        check=True,
+        env=dict(os.environ, PYTHONPATH="/root"),
+    )
+    return json.loads(output.read_text())
+
+
+@app.function(**_gpu_options(timeout=3600))
+def _controlled_custom(operation: str, variant: str = "complete") -> dict:
+    """Run one clean custom-engine process for correctness or the full matrix."""
+    _print_run_header(f"controlled {operation}: custom/{variant}")
+    return _controlled_child("custom", operation, variant)
+
+
+@app.function(
+    image=vllm_image,
+    gpu=MODAL_CFG["gpu"],
+    volumes={"/cache": volume},
+    timeout=3600,
+    scaledown_window=MODAL_CFG["scaledown_window_seconds"],
+    max_containers=1,
+)
+def _controlled_vllm(operation: str) -> dict:
+    """Run one clean vLLM process for correctness or the full matrix."""
+    _print_run_header(f"controlled {operation}: vLLM")
+    return _controlled_child("vllm", operation, "complete")
+
+
+def _write_controlled_environment(
+    path: Path,
+    custom: dict,
+    vllm: dict,
+    benchmark_results: list[dict] | None = None,
+) -> None:
+    fields = (
+        ("GPU", "gpu"),
+        ("GPU memory", "gpu_memory_bytes"),
+        ("Driver", "driver"),
+        ("CUDA", "cuda"),
+        ("PyTorch", "pytorch"),
+        ("Python", "python"),
+        ("Model", "model"),
+        ("Model revision", "model_revision"),
+        ("Tokenizer", "tokenizer_class"),
+        ("dtype", "dtype"),
+    )
+    lines = ["# Controlled experiment environment", ""]
+    for label, key in fields:
+        lines.append(f"{label}: {custom[key]}")
+    lines.extend(
+        [
+            f"Tokenizer package (custom): {custom['tokenizers']}",
+            f"Tokenizer package (vLLM): {vllm['tokenizers']}",
+            f"Transformers (custom): {custom['transformers']}",
+            f"Transformers (vLLM): {vllm['transformers']}",
+            f"vLLM version: {vllm['vllm']}",
+            f"Correctness source (custom): {custom['repository_commit']}",
+            f"Correctness source (vLLM): {vllm['repository_commit']}",
+            "",
+            "Both runtimes receive the exact input token IDs stored in workloads.jsonl; "
+            "client-side tokenization is bypassed during measurement.",
+        ]
+    )
+    if benchmark_results:
+        sources: dict[str, set[str]] = {}
+        for result in benchmark_results:
+            sources.setdefault(result["environment"]["implementation"], set()).add(
+                result["environment"]["repository_commit"]
+            )
+        lines.extend(
+            f"Benchmark source ({implementation}): {', '.join(sorted(commits))}"
+            for implementation, commits in sorted(sources.items())
+        )
+    all_sources = {custom["repository_commit"], vllm["repository_commit"]}
+    all_sources.update(
+        result["environment"]["repository_commit"] for result in benchmark_results or []
+    )
+    if len(all_sources) == 1:
+        lines.insert(2, f"Repository commit: {all_sources.pop()}")
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _write_controlled_summary(root: Path, results: list[dict]) -> None:
+    grouped: dict[tuple[str, str, str], list[dict]] = {}
+    for result in results:
+        implementation = result["environment"]["implementation"]
+        variant = result["variant"]
+        for cell in result["cells"]:
+            grouped.setdefault((implementation, variant, cell["cell"]["name"]), []).append(
+                cell["summary"]
+            )
+    destination = root / "summaries/results.csv"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    metrics = (
+        "ttft_ms",
+        "itl_ms",
+        "total_request_latency_ms",
+        "output_tokens_per_second",
+        "requests_per_second",
+        "peak_gpu_memory_bytes",
+        "failures",
+        "timeouts",
+    )
+    with destination.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(("implementation", "variant", "cell", "restarts", *metrics))
+        for key, rows in sorted(grouped.items()):
+            medians = []
+            for metric in metrics:
+                values = [row[metric] for row in rows if row[metric] is not None]
+                medians.append(statistics.median(values) if values else "")
+            writer.writerow((*key, len(rows), *medians))
+
+
+@app.local_entrypoint()
+def controlled_experiment(
+    output: str = "experiments",
+    restarts: int = 3,
+    variants: str = "complete,no_triton,no_continuous_batching,no_prefix_reuse,no_cuda_graph",
+    correctness_only: bool = False,
+    resume: bool = False,
+) -> None:
+    """Correctness-gate, then run the exact matrix and supported ablations."""
+    if restarts < 1:
+        raise SystemExit("restarts must be positive")
+    root = Path(output)
+    custom_raw = root / "raw/custom-server"
+    vllm_raw = root / "raw/vllm"
+    custom_raw.mkdir(parents=True, exist_ok=True)
+    vllm_raw.mkdir(parents=True, exist_ok=True)
+
+    print("phase 1/2: exact token-ID correctness gate")
+    custom_gate_path = custom_raw / "correctness.json"
+    vllm_gate_path = vllm_raw / "correctness.json"
+    if resume and custom_gate_path.exists() and vllm_gate_path.exists():
+        custom_correctness = json.loads(custom_gate_path.read_text())
+        vllm_correctness = json.loads(vllm_gate_path.read_text())
+    else:
+        custom_correctness = _controlled_custom.remote("correctness", "complete")
+        vllm_correctness = _controlled_vllm.remote("correctness")
+    (custom_raw / "correctness.json").write_text(json.dumps(custom_correctness, indent=2))
+    (vllm_raw / "correctness.json").write_text(json.dumps(vllm_correctness, indent=2))
+    _write_controlled_environment(
+        root / "environment.md",
+        custom_correctness["environment"],
+        vllm_correctness["environment"],
+    )
+    with (root / "workloads.jsonl").open("w") as handle:
+        for record in custom_correctness["workloads"]:
+            handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+
+    fixed_keys = (
+        "gpu",
+        "gpu_memory_bytes",
+        "driver",
+        "cuda",
+        "pytorch",
+        "python",
+        "model",
+        "model_revision",
+        "tokenizer_class",
+        "tokenizers",
+        "dtype",
+    )
+    mismatches = [
+        key
+        for key in fixed_keys
+        if custom_correctness["environment"][key] != vllm_correctness["environment"][key]
+    ]
+    parity = custom_correctness["outputs"] == vllm_correctness["outputs"]
+    same_workload = custom_correctness["workload_hash"] == vllm_correctness["workload_hash"]
+    if mismatches or not parity or not same_workload:
+        reason = {
+            "environment_mismatches": mismatches,
+            "exact_token_parity": parity,
+            "identical_workload_hash": same_workload,
+            "benchmark_started": False,
+        }
+        (root / "summaries").mkdir(parents=True, exist_ok=True)
+        (root / "summaries/correctness-gate.json").write_text(json.dumps(reason, indent=2))
+        raise SystemExit(f"correctness gate failed; speed benchmark stopped: {reason}")
+    gate = {
+        "environment_mismatches": [],
+        "exact_token_parity": True,
+        "identical_workload_hash": True,
+        "custom_crashes": 0,
+        "custom_ooms": 0,
+        "vllm_crashes": 0,
+        "vllm_ooms": 0,
+        "benchmark_started": not correctness_only,
+    }
+    (root / "summaries").mkdir(parents=True, exist_ok=True)
+    (root / "summaries/correctness-gate.json").write_text(json.dumps(gate, indent=2))
+    if correctness_only:
+        print(f"controlled correctness gate passed: {root}")
+        return
+
+    selected = [value.strip() for value in variants.split(",") if value.strip()]
+    unknown = set(selected) - {"complete", "no_triton", "no_continuous_batching", "no_prefix_reuse", "no_cuda_graph"}
+    if unknown:
+        raise SystemExit(f"unknown variants: {sorted(unknown)}")
+    print("phase 2/2: matrix; each result comes from a clean child process")
+    results = []
+    for variant in selected:
+        for restart in range(1, restarts + 1):
+            path = custom_raw / f"{variant}-restart-{restart}.json"
+            result = (
+                json.loads(path.read_text())
+                if resume and path.exists()
+                else _controlled_custom.remote("benchmark", variant)
+            )
+            results.append(result)
+            path.write_text(json.dumps(result, indent=2))
+    for restart in range(1, restarts + 1):
+        path = vllm_raw / f"complete-restart-{restart}.json"
+        result = (
+            json.loads(path.read_text())
+            if resume and path.exists()
+            else _controlled_vllm.remote("benchmark")
+        )
+        results.append(result)
+        path.write_text(json.dumps(result, indent=2))
+    _write_controlled_environment(
+        root / "environment.md",
+        custom_correctness["environment"],
+        vllm_correctness["environment"],
+        results,
+    )
+    _write_controlled_summary(root, results)
+    exclusions = root / "summaries/exclusions.md"
+    exclusions.write_text(
+        "# Excluded ablations\n\n"
+        "- The no-Triton run uses eager execution because the Torch reference backend cannot "
+        "replay the Triton-oriented CUDA graph. Its isolated kernel effect must be computed "
+        "against `no_cuda_graph`, not against `complete`.\n"
+        "- Paged KV off: excluded because the packed runner has no contiguous-KV backend; "
+        "using the legacy batched mode would also change the runner, scheduler, and kernel.\n"
+        "- Eviction off: excluded because recompute preemption is not independently configurable "
+        "and this matrix does not intentionally force KV pressure.\n"
+        "- KV block sizes 32 and 64: excluded because the v1 kernel supports only 16.\n"
+    )
+    print(f"controlled experiment complete: {root}")
 
 
 def _print_benchmark_table(result: dict) -> None:

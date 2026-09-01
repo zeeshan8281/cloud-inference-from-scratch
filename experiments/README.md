@@ -1,5 +1,27 @@
 # Experiment template
 
+## Controlled vLLM paper experiment
+
+Run the correctness gate, three clean-process matrix restarts, and supported
+one-switch ablations with:
+
+```bash
+./experiments/reproduce.sh
+```
+
+The command writes exact input token IDs to `workloads.jsonl`, every raw request
+record under `raw/`, median restart summaries to `summaries/results.csv`, and
+the measured software/hardware identity to `environment.md`. It stops before
+timing if the two runtimes differ on deterministic token IDs, workload hashes,
+or the fixed environment fields.
+
+The v1 ragged kernel supports only 16-token KV blocks. Paged-KV and eviction
+ablations are recorded as excluded because neither can be disabled without also
+changing another runtime component; legacy modes are not mislabeled as isolated
+ablations.
+
+## Scheduler policy template
+
 Copy `starter.py`, edit its `priority(candidate)` function, then run:
 
 ```bash

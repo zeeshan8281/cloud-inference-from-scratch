@@ -19,6 +19,7 @@ from typing import Any
 from .attention import (
     AttentionBackend,
     PackedContext,
+    RaggedTorchAttentionBackend,
     RaggedTritonAttentionBackend,
     StepContext,
     TritonDecodeAttentionBackend,
@@ -677,17 +678,24 @@ class InferenceEngine:
                     else 0
                 ),
             )
-            backend_type = (
-                RaggedTritonAttentionBackend
-                if self.config.mode == "ragged"
-                else TritonDecodeAttentionBackend
+            backend_type = TritonDecodeAttentionBackend
+            if self.config.mode == "ragged":
+                backend_type = (
+                    RaggedTritonAttentionBackend
+                    if self.config.use_triton_attention
+                    else RaggedTorchAttentionBackend
+                )
+            backend_options = (
+                {"allow_reference_fallback": self.config.allow_reference_fallback}
+                if backend_type is not RaggedTorchAttentionBackend
+                else {}
             )
             attn_backend = backend_type(
                 self.cache,
                 dims.num_heads,
                 dims.num_kv_heads,
                 dims.head_dim,
-                allow_reference_fallback=self.config.allow_reference_fallback,
+                **backend_options,
             )
         else:  # pragma: no cover - validated in config
             raise ValueError(f"unsupported mode {self.config.mode}")

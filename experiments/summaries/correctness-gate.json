@@ -1,0 +1,10 @@
+{
+  "environment_mismatches": [],
+  "exact_token_parity": true,
+  "identical_workload_hash": true,
+  "custom_crashes": 0,
+  "custom_ooms": 0,
+  "vllm_crashes": 0,
+  "vllm_ooms": 0,
+  "benchmark_started": true
+}

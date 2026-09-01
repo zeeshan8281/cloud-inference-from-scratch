@@ -56,7 +56,7 @@
     "torch": "2.7.1",
     "triton": "3.3.1",
     "transformers": "4.51.3",
-    "tokenizers": "0.21.1",
+    "tokenizers": "0.21.2",
     "safetensors": "0.5.3",
     "huggingface_hub": "0.30.2",
     "fastapi": "0.115.12",
