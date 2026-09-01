@@ -10,3 +10,5 @@ venv/
 .modal/
 .env
 .DS_Store
+.gstack/
+.hallmark/
