@@ -231,6 +231,11 @@ sentinel_image = (
         copy=True,
     )
     .add_local_file(
+        Path(__file__).parent / "experiments/sentinel_diagnostics.py",
+        "/root/experiments/sentinel_diagnostics.py",
+        copy=True,
+    )
+    .add_local_file(
         Path(__file__).parent / "engine_config.json",
         "/root/engine_config.json",
         copy=True,
@@ -1977,6 +1982,104 @@ def sentinel_self_consistency_check(mode: str = "resource_normalized") -> None:
     engine entirely?"""
     result = _sentinel_self_consistency_check.remote(mode)
     print(json.dumps(result, indent=2))
+
+
+def _run_diagnostic_child(config: dict, workdir: Path) -> dict:
+    workdir.mkdir(parents=True, exist_ok=True)
+    config_path = workdir / "config.json"
+    output_path = workdir / "output.json"
+    config_path.write_text(json.dumps(config))
+    stdout_path = workdir / "stdout.log"
+    stderr_path = workdir / "stderr.log"
+    with open(stdout_path, "w") as out, open(stderr_path, "w") as err:
+        try:
+            completed = subprocess.run(
+                [sys.executable, "/root/experiments/sentinel_diagnostics.py", str(config_path), str(output_path)],
+                stdout=out,
+                stderr=err,
+                env=dict(os.environ, PYTHONPATH="/root"),
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            return {"crashed": True, "stderr_tail": "timed out after 300s"}
+    if completed.returncode != 0:
+        return {"crashed": True, "stderr_tail": stderr_path.read_text()[-4000:]}
+    return {"crashed": False, "result": json.loads(output_path.read_text())}
+
+
+@app.function(
+    image=sentinel_image,
+    gpu=MODAL_CFG["gpu"],
+    volumes={"/cache": volume},
+    timeout=3600,
+    max_containers=1,
+)
+def _sentinel_divergence_diagnostic() -> dict:
+    """Bounded root-cause investigation, not the 10-pair protocol. See
+    experiments/sentinel_diagnostics.py for the full design rationale."""
+    from transformers import AutoTokenizer
+
+    from experiments.sentinel_diagnostics import batch_for_concurrency, build_diagnostic_prompts
+
+    _print_run_header("sentinel pilot divergence diagnostic")
+    model_dir = _prepare_weights(RAGGED_MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    prompts = build_diagnostic_prompts(tokenizer)
+
+    workdir = Path(tempfile.mkdtemp(prefix="sentinel-diagnostic-"))
+    runs: dict[str, dict] = {}
+
+    def run(name: str, implementation: str, concurrency: int, **engine_options) -> None:
+        config = {
+            "implementation": implementation,
+            "model_dir": model_dir,
+            "batch_ids": batch_for_concurrency(prompts, concurrency),
+            "engine_options": engine_options,
+        }
+        runs[name] = _run_diagnostic_child(config, workdir / name)
+
+    # Base condition (matches the resource_normalized sentinel-pilot mode
+    # exactly) at every concurrency level.
+    for concurrency in (1, 2, 8, 32):
+        run(f"custom_base_c{concurrency}", "custom", concurrency)
+        run(f"vllm_base_c{concurrency}", "vllm", concurrency)
+
+    # Backend matrix at c8 only (the smallest failing case).
+    run("custom_c8_torch_attention", "custom", 8, use_triton_attention=False)
+    run("custom_c8_graphs_on", "custom", 8, cuda_graph_decode=True)
+    run("custom_c8_prefix_cache_on", "custom", 8, prefix_cache_max_blocks=256)
+    run("vllm_c8_graphs_on", "vllm", 8, enforce_eager=False)
+    run("vllm_c8_prefix_cache_on", "vllm", 8, enable_prefix_caching=True)
+
+    # Hugging Face Transformers reference, concurrency 1 only (see
+    # run_hf_diagnostic's docstring for why: no padding needed at c1, so
+    # nothing about HF's own batching can confound the oracle).
+    for dtype in ("float16", "bfloat16", "float32"):
+        config = {
+            "implementation": "hf",
+            "model_dir": model_dir,
+            "batch_ids": batch_for_concurrency(prompts, 1),
+            "dtype": dtype,
+        }
+        runs[f"hf_c1_{dtype}"] = _run_diagnostic_child(config, workdir / f"hf_c1_{dtype}")
+
+    return {"runs": runs, "target_request": prompts["target"]}
+
+
+@app.local_entrypoint()
+def sentinel_divergence_diagnostic(
+    output: str = "experiments/sentinel-pilot/summaries/divergence-diagnostic.json",
+) -> None:
+    """Bounded root-cause investigation of the concurrency > 1 token
+    divergence. Does NOT rerun the 10-pair protocol or relax the correctness
+    gate. Writes the raw result for experiments/sentinel_diagnostics.py's
+    analysis/report step to consume."""
+    result = _sentinel_divergence_diagnostic.remote()
+    destination = Path(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(result, indent=2))
+    crashed = [name for name, run in result["runs"].items() if run["crashed"]]
+    print(f"divergence diagnostic written to {destination}; {len(crashed)} runs crashed: {crashed}")
 
 
 @app.local_entrypoint()
