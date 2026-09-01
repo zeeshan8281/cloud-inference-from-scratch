@@ -1,7 +1,8 @@
 # Correctness Protocol V2
 
-Status: **calibration executed, epsilon committed, holdout not yet
-evaluated**. Performance measurement remains paused. The original stopped
+Status: **calibration and sealed holdout both executed; requirement-10 gate
+does not pass (2 hard failures on holdout)**. Performance measurement
+remains paused -- see "Sealed holdout results" below. The original stopped
 pilot
 (`experiments/sentinel-pilot/raw/resource-normalized/pair-01.json`,
 `experiments/sentinel-pilot/raw/complete-policy/pair-01.json`) is preserved
@@ -203,7 +204,49 @@ maximum margin among the 10 clean candidates, per the rule already specified
 above (never chosen by inspection after the fact). Full data:
 `experiments/sentinel-pilot/summaries/protocol-v2-calibration.json`.
 
-This epsilon has not yet been evaluated against the sealed holdout set.
+## Sealed holdout results: gate does not pass
+
+Executed via `modal run modal_app.py::protocol_v2_holdout --epsilon
+0.012599945068359375`, on the disjoint holdout set (same 107-request
+structure, different seed namespace, never inspected before this run), using
+exactly the epsilon committed above. 0 crashes.
+
+| | |
+|---|---:|
+| Exact match | 95 / 107 (88.79%) |
+| Near-tie qualified | 10 / 107 (9.35%) |
+| Hard failures | 2 / 107 (1.87%) |
+
+**Requirement 10 gate: DOES NOT PASS** (hard failures must be zero).
+
+The 2 hard failures, both `confident_disagreement_no_near_tie` (one engine's
+own margin exceeded the committed epsilon):
+
+1. `in512-out128-c8`, position 1: custom margin 0.0136 (marginally above
+   epsilon), vLLM margin 0.0 (exact tie). Max abs log-prob diff **10.0**,
+   top-20 overlap 0.95 -- unlike the originally diagnosed case, this one's
+   two distributions differ substantially somewhere in the top-20, not just
+   by a marginal perturbation. Worth individual scrutiny, not just a wider
+   epsilon.
+2. `in512-out128-c32`, position 1: custom margin 0.0000267 (itself an
+   essentially exact tie), vLLM margin 0.015625 -- exceeds the committed
+   epsilon by about 24%. Max abs diff 0.0094, overlap 1.0: same small-scale
+   signature as the originally diagnosed request, just past the specific
+   numeric cutoff a 10-sample calibration set happened to produce.
+
+This is the expected, correct behavior of a properly sealed evaluation: an
+epsilon derived from only 10 calibration candidates does not fully
+generalize, and the holdout set's job is exactly to catch that rather than
+let a small sample's ceiling pass silently. Full data:
+`experiments/sentinel-pilot/summaries/protocol-v2-holdout.json`.
+
+**Per requirement 10, the 10-pair performance protocol does not resume.**
+The correct next step is a larger calibration sample (to better characterize
+the true near-tie margin distribution) or per-case inspection of failure 1
+specifically (its large max-abs-diff is qualitatively different from every
+other disagreement observed across this entire investigation) -- not
+re-deriving epsilon from this holdout set, which would be tuning a threshold
+on the data used to test it.
 
 ## What this document does not do
 

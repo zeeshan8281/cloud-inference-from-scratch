@@ -1,0 +1,1079 @@
+{
+  "split": "holdout",
+  "epsilon": 0.012599945068359375,
+  "crashed": {},
+  "classifications": [
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c1",
+      "batch_index": 0,
+      "concurrency": 1
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c1",
+      "batch_index": 1,
+      "concurrency": 1
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c1",
+      "batch_index": 2,
+      "concurrency": 1
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 0,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "near_tie_qualified",
+      "disagreement": {
+        "position": 3,
+        "custom_token": 432,
+        "vllm_token": 279,
+        "custom_margin": 0.00966644287109375,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.011646619600180763,
+        "mean_abs_diff": 0.004406166076660156,
+        "cosine_similarity": 0.9999992310108387,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "near_tie_qualified",
+      "disagreement": {
+        "position": 1,
+        "custom_token": 1053,
+        "vllm_token": 323,
+        "custom_margin": 0.0035228729248046875,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.012912949609719782,
+        "mean_abs_diff": 0.0043721753978802624,
+        "cosine_similarity": 0.9999992161406768,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "near_tie_qualified",
+      "disagreement": {
+        "position": 3,
+        "custom_token": 8171,
+        "vllm_token": 1555,
+        "custom_margin": 0.0109405517578125,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.01211697922232613,
+        "mean_abs_diff": 0.004983003006461128,
+        "cosine_similarity": 0.9999991361521265,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "hard_failure",
+      "disagreement": {
+        "position": 1,
+        "custom_token": 432,
+        "vllm_token": 279,
+        "custom_margin": 0.013591766357421875,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 10.004648232052567,
+        "mean_abs_diff": 0.9574901093590255,
+        "cosine_similarity": 0.8359643349400754,
+        "top_k_overlap": 0.95,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [
+        "confident_disagreement_no_near_tie"
+      ],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 1,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 2,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 3,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c8",
+      "batch_index": 4,
+      "concurrency": 8
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "near_tie_qualified",
+      "disagreement": {
+        "position": 6,
+        "custom_token": 8171,
+        "vllm_token": 2310,
+        "custom_margin": 0.002605438232421875,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.011308265448787935,
+        "mean_abs_diff": 0.0059749892239487675,
+        "cosine_similarity": 0.9999989268874129,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 0,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "near_tie_qualified",
+      "disagreement": {
+        "position": 0,
+        "custom_token": 705,
+        "vllm_token": 279,
+        "custom_margin": 0.00188446044921875,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 10.009150559351141,
+        "mean_abs_diff": 0.955442401270879,
+        "cosine_similarity": 0.8346031563691825,
+        "top_k_overlap": 0.95,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "near_tie_qualified",
+      "disagreement": {
+        "position": 0,
+        "custom_token": 8171,
+        "vllm_token": 279,
+        "custom_margin": 0.011358261108398438,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 10.00820977478806,
+        "mean_abs_diff": 0.9565644051495281,
+        "cosine_similarity": 0.828260024449413,
+        "top_k_overlap": 0.95,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "near_tie_qualified",
+      "disagreement": {
+        "position": 1,
+        "custom_token": 2310,
+        "vllm_token": 323,
+        "custom_margin": 0.001277923583984375,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.010377409645037083,
+        "mean_abs_diff": 0.004324936352547759,
+        "cosine_similarity": 0.9999993963904982,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "near_tie_qualified",
+      "disagreement": {
+        "position": 0,
+        "custom_token": 2182,
+        "vllm_token": 1744,
+        "custom_margin": 0.0014591217041015625,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.006467011995836103,
+        "mean_abs_diff": 0.002950442859441482,
+        "cosine_similarity": 0.9999997045512549,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "hard_failure",
+      "disagreement": {
+        "position": 1,
+        "custom_token": 1899,
+        "vllm_token": 2525,
+        "custom_margin": 2.6702880859375e-05,
+        "vllm_margin": 0.015625,
+        "max_abs_diff": 0.009396961497860623,
+        "mean_abs_diff": 0.004983370618780203,
+        "cosine_similarity": 0.9999992735960552,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [
+        "confident_disagreement_no_near_tie"
+      ],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "near_tie_qualified",
+      "disagreement": {
+        "position": 2,
+        "custom_token": 279,
+        "vllm_token": 264,
+        "custom_margin": 0.0072307586669921875,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 0.009070800359885833,
+        "mean_abs_diff": 0.003474466663185849,
+        "cosine_similarity": 0.9999995302867748,
+        "top_k_overlap": 1.0,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "near_tie_qualified",
+      "disagreement": {
+        "position": 0,
+        "custom_token": 3409,
+        "vllm_token": 1977,
+        "custom_margin": 1.9073486328125e-06,
+        "vllm_margin": 0.0,
+        "max_abs_diff": 10.000449008149804,
+        "mean_abs_diff": 0.9562336420262857,
+        "cosine_similarity": 0.8378166948020634,
+        "top_k_overlap": 0.95,
+        "custom_token_in_vllm_top_k": true,
+        "vllm_token_in_custom_top_k": true
+      },
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    },
+    {
+      "verdict": "exact_match",
+      "disagreement": null,
+      "reasons": [],
+      "cell": "in512-out128-c32",
+      "batch_index": 1,
+      "concurrency": 32
+    }
+  ],
+  "summary": {
+    "total": 107,
+    "exact_match": 95,
+    "exact_match_pct": 88.79,
+    "near_tie_qualified": 10,
+    "near_tie_qualified_pct": 9.35,
+    "hard_failures": 2,
+    "hard_failure_pct": 1.87,
+    "pending_epsilon": 0,
+    "hard_failure_detail": [
+      {
+        "verdict": "hard_failure",
+        "disagreement": {
+          "position": 1,
+          "custom_token": 432,
+          "vllm_token": 279,
+          "custom_margin": 0.013591766357421875,
+          "vllm_margin": 0.0,
+          "max_abs_diff": 10.004648232052567,
+          "mean_abs_diff": 0.9574901093590255,
+          "cosine_similarity": 0.8359643349400754,
+          "top_k_overlap": 0.95,
+          "custom_token_in_vllm_top_k": true,
+          "vllm_token_in_custom_top_k": true
+        },
+        "reasons": [
+          "confident_disagreement_no_near_tie"
+        ],
+        "cell": "in512-out128-c8",
+        "batch_index": 1,
+        "concurrency": 8
+      },
+      {
+        "verdict": "hard_failure",
+        "disagreement": {
+          "position": 1,
+          "custom_token": 1899,
+          "vllm_token": 2525,
+          "custom_margin": 2.6702880859375e-05,
+          "vllm_margin": 0.015625,
+          "max_abs_diff": 0.009396961497860623,
+          "mean_abs_diff": 0.004983370618780203,
+          "cosine_similarity": 0.9999992735960552,
+          "top_k_overlap": 1.0,
+          "custom_token_in_vllm_top_k": true,
+          "vllm_token_in_custom_top_k": true
+        },
+        "reasons": [
+          "confident_disagreement_no_near_tie"
+        ],
+        "cell": "in512-out128-c32",
+        "batch_index": 1,
+        "concurrency": 32
+      }
+    ],
+    "near_tie_margins": [
+      0.00966644287109375,
+      0.0035228729248046875,
+      0.0109405517578125,
+      0.002605438232421875,
+      0.00188446044921875,
+      0.011358261108398438,
+      0.001277923583984375,
+      0.0014591217041015625,
+      0.0072307586669921875,
+      1.9073486328125e-06
+    ]
+  }
+}
