@@ -236,6 +236,11 @@ sentinel_image = (
         copy=True,
     )
     .add_local_file(
+        Path(__file__).parent / "experiments/protocol_v2.py",
+        "/root/experiments/protocol_v2.py",
+        copy=True,
+    )
+    .add_local_file(
         Path(__file__).parent / "engine_config.json",
         "/root/engine_config.json",
         copy=True,
@@ -2128,6 +2133,152 @@ def _sentinel_diagnostic_debug_one() -> dict:
 def sentinel_diagnostic_debug_one() -> None:
     result = _sentinel_diagnostic_debug_one.remote()
     print(json.dumps(result, indent=2))
+
+
+def _run_protocol_v2_child(config: dict, workdir: Path) -> dict:
+    workdir.mkdir(parents=True, exist_ok=True)
+    config_path = workdir / "config.json"
+    output_path = workdir / "output.json"
+    config_path.write_text(json.dumps(config))
+    stdout_path = workdir / "stdout.log"
+    stderr_path = workdir / "stderr.log"
+    with open(stdout_path, "w") as out, open(stderr_path, "w") as err:
+        try:
+            completed = subprocess.run(
+                [sys.executable, "/root/experiments/protocol_v2.py", str(config_path), str(output_path)],
+                stdout=out,
+                stderr=err,
+                env=dict(os.environ, PYTHONPATH="/root"),
+                timeout=1200,
+            )
+        except subprocess.TimeoutExpired:
+            return {"crashed": True, "stderr_tail": "timed out after 1200s"}
+    if completed.returncode != 0:
+        return {"crashed": True, "stderr_tail": stderr_path.read_text()[-4000:]}
+    return {"crashed": False, "result": json.loads(output_path.read_text())}
+
+
+@app.function(
+    image=sentinel_image,
+    gpu=MODAL_CFG["gpu"],
+    volumes={"/cache": volume},
+    timeout=3600,
+    max_containers=1,
+)
+def _protocol_v2_run(split: str, epsilon: float | None) -> dict:
+    """Runs one split (calibration or sealed holdout) of Correctness
+    Protocol V2 (see CORRECTNESS_PROTOCOL_V2.md): every request in every
+    batch is classified via experiments.protocol_v2.classify_request. When
+    epsilon is None (calibration), disagreements are left pending and
+    experiments.protocol_v2.propose_epsilon is applied at the end."""
+    from transformers import AutoTokenizer
+
+    from experiments.protocol_v2 import (
+        V2_CELLS,
+        build_split_batches,
+        classify_request,
+        propose_epsilon,
+        summarize,
+    )
+
+    _print_run_header(f"correctness protocol v2: {split}")
+    model_dir = _prepare_weights(RAGGED_MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    batches_by_cell = build_split_batches(tokenizer, split)
+
+    workdir = Path(tempfile.mkdtemp(prefix=f"protocol-v2-{split}-"))
+    child_results: dict[str, dict] = {}
+    for implementation in ("custom", "vllm"):
+        for cell in V2_CELLS:
+            config = {
+                "implementation": implementation,
+                "model_dir": model_dir,
+                "batches": batches_by_cell[cell.name],
+                "engine_options": {},
+            }
+            name = f"{implementation}_{cell.name}"
+            child_results[name] = _run_protocol_v2_child(config, workdir / name)
+
+    crashed = {name: child for name, child in child_results.items() if child["crashed"]}
+    if crashed:
+        return {"split": split, "crashed": crashed, "classifications": [], "summary": None}
+
+    classifications = []
+    for cell in V2_CELLS:
+        custom_batches = child_results[f"custom_{cell.name}"]["result"]["batch_results"]
+        vllm_batches = child_results[f"vllm_{cell.name}"]["result"]["batch_results"]
+        for batch_index, (custom_batch, vllm_batch) in enumerate(zip(custom_batches, vllm_batches, strict=True)):
+            for custom_request, vllm_request in zip(custom_batch, vllm_batch, strict=True):
+                entry = classify_request(custom_request, vllm_request, epsilon, concurrency=cell.concurrency)
+                entry["cell"] = cell.name
+                entry["batch_index"] = batch_index
+                entry["concurrency"] = cell.concurrency
+                classifications.append(entry)
+
+    result = {
+        "split": split,
+        "epsilon": epsilon,
+        "crashed": {},
+        "classifications": classifications,
+        "summary": summarize(classifications),
+    }
+    if epsilon is None:
+        result["proposed_epsilon"] = propose_epsilon(classifications)
+    return result
+
+
+@app.local_entrypoint()
+def protocol_v2_calibration(
+    output: str = "experiments/sentinel-pilot/summaries/protocol-v2-calibration.json",
+) -> None:
+    """Correctness Protocol V2, calibration split only. Proposes an epsilon;
+    does NOT commit it and does NOT run the sealed holdout set. See
+    CORRECTNESS_PROTOCOL_V2.md requirements 6, 7, 9."""
+    result = _protocol_v2_run.remote("calibration", None)
+    destination = Path(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(result, indent=2))
+    if result["crashed"]:
+        print(f"calibration CRASHED: {list(result['crashed'])}")
+        return
+    print(f"calibration written to {destination}")
+    print(json.dumps(result["summary"], indent=2))
+    print("proposed epsilon:", json.dumps(result["proposed_epsilon"], indent=2))
+    print(
+        "This epsilon is NOT committed. Review it, then commit it explicitly "
+        "(e.g. into CORRECTNESS_PROTOCOL_V2.md or a companion file) before "
+        "running protocol_v2_holdout with it."
+    )
+
+
+@app.local_entrypoint()
+def protocol_v2_holdout(
+    epsilon: float,
+    output: str = "experiments/sentinel-pilot/summaries/protocol-v2-holdout.json",
+) -> None:
+    """Correctness Protocol V2, sealed holdout split only. `epsilon` must be
+    a value already committed to source control (requirement 9) -- this
+    entrypoint does not check that itself, it only refuses to derive
+    epsilon from the holdout data (epsilon is a required argument, not
+    computed here)."""
+    result = _protocol_v2_run.remote("holdout", epsilon)
+    destination = Path(output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(result, indent=2))
+    if result["crashed"]:
+        print(f"holdout CRASHED: {list(result['crashed'])}")
+        return
+    print(f"holdout written to {destination}")
+    print(json.dumps(result["summary"], indent=2))
+    gate_passes = (
+        result["summary"]["hard_failures"] == 0
+        and result["summary"]["pending_epsilon"] == 0
+    )
+    print(f"CORRECTNESS_PROTOCOL_V2.md requirement 10 gate: {'PASSES' if gate_passes else 'DOES NOT PASS'}")
+    print(
+        "This does not by itself resume the 10-pair performance protocol -- "
+        "that remains a separate, explicit decision."
+    )
 
 
 @app.local_entrypoint()
