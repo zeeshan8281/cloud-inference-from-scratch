@@ -349,6 +349,23 @@ def _vllm_engine(model_dir: str, model: dict[str, Any], prefix_reuse: bool):
     return LLMEngine.from_engine_args(args)
 
 
+def _record_vllm_step(state: dict[str, dict[str, Any]], outputs: list[Any], stamp: float) -> None:
+    """Attribute one `engine.step()` call's outputs to a single wall-clock stamp.
+
+    `stamp` must be read after `engine.step()` returns: vLLM does not expose a
+    per-token timestamp, so every token a request gains in this step (there may
+    be more than one, e.g. under chunked prefill or speculative decoding) is
+    assigned the same completion time.
+    """
+    for output in outputs:
+        item = state[output.request_id]
+        token_ids = list(output.outputs[0].token_ids)
+        while len(item["stamps"]) < len(token_ids):
+            item["stamps"].append(stamp)
+        item["token_ids"] = token_ids
+        item["finished"] = output.finished
+
+
 def _vllm_requests(engine: Any, cell: Cell, seeds: list[int], run_id: str) -> dict:
     import torch
     from vllm import SamplingParams
@@ -380,13 +397,7 @@ def _vllm_requests(engine: Any, cell: Cell, seeds: list[int], run_id: str) -> di
                 break
             outputs = engine.step()
             stamp = time.perf_counter()
-            for output in outputs:
-                item = state[output.request_id]
-                token_ids = list(output.outputs[0].token_ids)
-                while len(item["stamps"]) < len(token_ids):
-                    item["stamps"].append(stamp)
-                item["token_ids"] = token_ids
-                item["finished"] = output.finished
+            _record_vllm_step(state, outputs, stamp)
     torch.cuda.synchronize()
     finished = time.perf_counter()
     records = []

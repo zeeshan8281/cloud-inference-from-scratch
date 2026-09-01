@@ -8,6 +8,10 @@ import statistics
 from pathlib import Path
 
 ROOT = Path(__file__).parent
+# Fixed plot/legend order for the two engines. Never derive display order from
+# a set: Python's string-hash randomization makes set iteration order vary
+# across PYTHONHASHSEED values, which would make the generated SVGs non-reproducible.
+IMPLEMENTATION_ORDER = ("custom-server", "vllm")
 METRICS = (
     "ttft_ms",
     "itl_ms",
@@ -147,13 +151,20 @@ def main() -> None:
         exclusions_path.write_text(exclusions + scheduler_exclusion)
     rows = _rows()
     cells = sorted({row["cell"] for row in rows})
+    present_implementations = {row["implementation"] for row in rows}
+    unknown_implementations = present_implementations - set(IMPLEMENTATION_ORDER)
+    if unknown_implementations:
+        raise ValueError(
+            f"IMPLEMENTATION_ORDER is missing implementation(s): {sorted(unknown_implementations)}"
+        )
     complete = {
         implementation: {
             row["cell"]: float(row["output_tokens_per_second"])
             for row in rows
             if row["implementation"] == implementation and row["variant"] == "complete"
         }
-        for implementation in {row["implementation"] for row in rows}
+        for implementation in IMPLEMENTATION_ORDER
+        if implementation in present_implementations
     }
     _svg_bars(
         ROOT / "plots/throughput.svg",
@@ -184,7 +195,10 @@ def main() -> None:
             for cell in result["cells"]
             for record in cell["records"]
         )
-        effects[variant] = (statistics.median(ratios), comparison, len(ratios), failures)
+        variant_timeouts = sum(
+            int(float(row["timeouts"])) for row in custom if row["variant"] == variant
+        )
+        effects[variant] = (statistics.median(ratios), comparison, len(ratios), failures, variant_timeouts)
     _svg_bars(
         ROOT / "plots/ablation-throughput.svg",
         "Median throughput ratio over failure-free cells",
@@ -283,15 +297,45 @@ def main() -> None:
             "",
             "## Ablations",
             "",
-            "| Variant | Comparison | Median throughput ratio | Failure-free cells | Failed requests |",
-            "|---|---|---:|---:|---:|",
+            "| Variant | Comparison | Median throughput ratio | Failure-free cells | Failed requests | Timeouts |",
+            "|---|---|---:|---:|---:|---:|",
         ]
     )
-    for variant, (effect, comparison, failure_free_cells, failures) in effects.items():
+    for variant, (effect, comparison, failure_free_cells, failures, variant_timeouts) in effects.items():
         lines.append(
             f"| `{variant}` | `{comparison}` | {effect:.3f}× | "
-            f"{failure_free_cells}/9 | {failures} |"
+            f"{failure_free_cells}/9 | {failures} | {variant_timeouts} |"
         )
+    lines.extend(
+        [
+            "",
+            "### Per-cell ablation effects",
+            "",
+            "Cells where the variant itself timed out are excluded from its median "
+            "and marked `excluded` here, with the variant's timeout count for that cell.",
+            "",
+            "| Variant | Cell | Ratio | Variant timeouts |",
+            "|---|---|---:|---:|",
+        ]
+    )
+    for variant in sorted(effects):
+        comparison = effects[variant][1]
+        comparison_values = {
+            row["cell"]: float(row["output_tokens_per_second"])
+            for row in custom
+            if row["variant"] == comparison
+        }
+        variant_rows = {row["cell"]: row for row in custom if row["variant"] == variant}
+        for cell in cells:
+            row = variant_rows.get(cell)
+            if row is None:
+                continue
+            cell_timeouts = int(float(row["timeouts"]))
+            if cell_timeouts or cell not in comparison_values:
+                lines.append(f"| `{variant}` | `{cell}` | excluded | {cell_timeouts} |")
+            else:
+                cell_ratio = float(row["output_tokens_per_second"]) / comparison_values[cell]
+                lines.append(f"| `{variant}` | `{cell}` | {cell_ratio:.3f}× | {cell_timeouts} |")
     (ROOT / "summaries/findings.md").write_text("\n".join(lines) + "\n")
 
 
