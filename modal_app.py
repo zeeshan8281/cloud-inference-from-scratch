@@ -2096,6 +2096,40 @@ def sentinel_divergence_diagnostic(
     print(f"divergence diagnostic written to {destination}; {len(crashed)} runs crashed: {crashed}")
 
 
+@app.function(
+    image=sentinel_image,
+    gpu=MODAL_CFG["gpu"],
+    volumes={"/cache": volume},
+    timeout=600,
+    max_containers=1,
+)
+def _sentinel_diagnostic_debug_one() -> dict:
+    """Debug-only, not part of any protocol: one cheap custom-engine c1 run,
+    to inspect whether the logit-capture hook actually fires."""
+    from transformers import AutoTokenizer
+
+    from experiments.sentinel_diagnostics import batch_for_concurrency, build_diagnostic_prompts
+
+    model_dir = _prepare_weights(RAGGED_MODEL)
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+    prompts = build_diagnostic_prompts(tokenizer)
+    workdir = Path(tempfile.mkdtemp(prefix="sentinel-diagnostic-debug-"))
+    config = {
+        "implementation": "custom",
+        "model_dir": model_dir,
+        "batch_ids": batch_for_concurrency(prompts, 1),
+        "target_index": 0,
+        "engine_options": {},
+    }
+    return _run_diagnostic_child(config, workdir / "debug")
+
+
+@app.local_entrypoint()
+def sentinel_diagnostic_debug_one() -> None:
+    result = _sentinel_diagnostic_debug_one.remote()
+    print(json.dumps(result, indent=2))
+
+
 @app.local_entrypoint()
 def main(command: str = "help") -> None:
     commands = {

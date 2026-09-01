@@ -278,6 +278,11 @@ async def run_custom_diagnostic(
         "output_tokens": target_tokens,
         "top_k": per_step_top_k[: len(target_tokens)],
         "verified": verified,
+        "debug": {
+            "pack_calls": len(captured_packs),
+            "logit_calls": len(captured_logits),
+            "sampled_request_ids_seen": [list(pack.sampled_request_ids) for pack in captured_packs],
+        },
     }
 
 
