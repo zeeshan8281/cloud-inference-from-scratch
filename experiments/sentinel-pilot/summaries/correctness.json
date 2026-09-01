@@ -1,0 +1,96 @@
+{
+  "resource_normalized": {
+    "pairs_present": 1,
+    "pairs_required": 10,
+    "stopped": true,
+    "stops": [
+      {
+        "pair": 1,
+        "stop": {
+          "kind": "token_mismatch",
+          "detail": {
+            "mismatches": [
+              {
+                "cell": "in512-out128-c8",
+                "phase": "unique",
+                "request_index": 1,
+                "reason": "token_mismatch"
+              },
+              {
+                "cell": "in512-out128-c8",
+                "phase": "unique",
+                "request_index": 3,
+                "reason": "token_mismatch"
+              },
+              {
+                "cell": "in1024-out256-c32",
+                "phase": "unique",
+                "request_index": 7,
+                "reason": "token_mismatch"
+              },
+              {
+                "cell": "in1024-out256-c32",
+                "phase": "unique",
+                "request_index": 10,
+                "reason": "token_mismatch"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "complete_system": {
+    "pairs_present": 1,
+    "pairs_required": 10,
+    "stopped": true,
+    "stops": [
+      {
+        "pair": 1,
+        "stop": {
+          "kind": "token_mismatch",
+          "detail": {
+            "mismatches": [
+              {
+                "cell": "in512-out128-c8",
+                "phase": "cold",
+                "request_index": 2,
+                "reason": "token_mismatch"
+              },
+              {
+                "cell": "in512-out128-c8",
+                "phase": "warm",
+                "request_index": 1,
+                "reason": "token_mismatch"
+              },
+              {
+                "cell": "in1024-out256-c32",
+                "phase": "cold",
+                "request_index": 18,
+                "reason": "token_mismatch"
+              },
+              {
+                "cell": "in1024-out256-c32",
+                "phase": "cold",
+                "request_index": 24,
+                "reason": "token_mismatch"
+              },
+              {
+                "cell": "in1024-out256-c32",
+                "phase": "warm",
+                "request_index": 5,
+                "reason": "token_mismatch"
+              },
+              {
+                "cell": "in1024-out256-c32",
+                "phase": "warm",
+                "request_index": 28,
+                "reason": "token_mismatch"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

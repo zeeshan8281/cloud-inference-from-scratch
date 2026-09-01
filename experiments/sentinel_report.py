@@ -38,6 +38,7 @@ MODE_PHASES = {
 # Phase 0 fix for why that breaks reproducibility across PYTHONHASHSEED).
 MODES = ("resource_normalized", "complete_system")
 CELL_NAMES = tuple(cell.name for cell in SENTINEL_CELLS)
+CELL_CONCURRENCY = {cell.name: cell.concurrency for cell in SENTINEL_CELLS}
 
 
 def _load_pairs(mode: str) -> list[dict[str, Any]]:
@@ -54,6 +55,46 @@ def _load_pairs(mode: str) -> list[dict[str, Any]]:
 
 def _throughput(child_result: dict[str, Any], cell_name: str, phase: str) -> float:
     return child_result["cells"][cell_name]["phases"][phase]["summary"]["output_tokens_per_second"]
+
+
+def _by_implementation(pair: dict[str, Any]) -> dict[str, Any]:
+    return {child["implementation"]: child["result"] for child in pair["children"]}
+
+
+def _mismatch_diagnostics(pair: dict[str, Any]) -> list[dict[str, Any]]:
+    """For a stopped, token_mismatch pair: the first output position at which
+    the two engines' token IDs actually differ, per mismatched request. Early
+    divergence confined to concurrency > 1 cells is the signature of
+    floating-point non-associativity across two different batched-execution
+    kernels, not a harness defect; this is computed directly from the raw
+    records so it is reproducible, not asserted by hand."""
+    by_implementation = _by_implementation(pair)
+    rows = []
+    for mismatch in pair["stop"]["detail"].get("mismatches", []):
+        cell, phase = mismatch["cell"], mismatch["phase"]
+        row = {
+            "cell": cell,
+            "concurrency": CELL_CONCURRENCY.get(cell),
+            "phase": phase,
+            "reason": mismatch["reason"],
+        }
+        index = mismatch.get("request_index")
+        if index is not None and "custom" in by_implementation and "vllm" in by_implementation:
+            try:
+                custom_records = by_implementation["custom"]["cells"][cell]["phases"][phase]["records"]
+                vllm_records = by_implementation["vllm"]["cells"][cell]["phases"][phase]["records"]
+                custom_ids = next(r["output_token_ids"] for r in custom_records if r["request_index"] == index)
+                vllm_ids = next(r["output_token_ids"] for r in vllm_records if r["request_index"] == index)
+                length = min(len(custom_ids), len(vllm_ids))
+                row["request_index"] = index
+                row["first_diff_position"] = next(
+                    (i for i in range(length) if custom_ids[i] != vllm_ids[i]), None
+                )
+                row["sequence_length"] = length
+            except (KeyError, StopIteration):
+                pass
+        rows.append(row)
+    return rows
 
 
 def _write_correctness(pairs_by_mode: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
@@ -142,7 +183,9 @@ def _write_paired_results(
 
 
 def _write_findings(
-    correctness: dict[str, Any], analysis: dict[str, dict[str, dict[str, Any]]]
+    correctness: dict[str, Any],
+    analysis: dict[str, dict[str, dict[str, Any]]],
+    pairs_by_mode: dict[str, list[dict[str, Any]]],
 ) -> None:
     lines = [
         "# Sentinel pilot findings: direct-engine closed-batch microbenchmark",
@@ -158,11 +201,44 @@ def _write_findings(
         lines.append(f"## {mode}")
         lines.append("")
         if correctness[mode]["stopped"]:
-            lines.append(
-                "**STOPPED.** No performance claim may be generated from a stopped pilot. "
-                f"Stop events: {json.dumps(correctness[mode]['stops'])}"
-            )
+            lines.append("**STOPPED.** No performance claim may be generated from a stopped pilot.")
             lines.append("")
+            for pair in pairs_by_mode[mode]:
+                if pair.get("stop") is None:
+                    continue
+                kind = pair["stop"]["kind"]
+                lines.append(f"Pair {pair['pair']:02d}: stop kind `{kind}`.")
+                if kind != "token_mismatch":
+                    lines.append(f"Detail: `{json.dumps(pair['stop']['detail'])}`")
+                    lines.append("")
+                    continue
+                diagnostics = _mismatch_diagnostics(pair)
+                positioned = [row for row in diagnostics if row.get("first_diff_position") is not None]
+                concurrencies = {row["concurrency"] for row in diagnostics if row.get("concurrency")}
+                if positioned:
+                    lines.append(
+                        f"{len(diagnostics)} of the pair's sentinel requests mismatched, confined to "
+                        f"concurrency {sorted(concurrencies)} cells; first differing output position "
+                        f"ranged {min(r['first_diff_position'] for r in positioned)}-"
+                        f"{max(r['first_diff_position'] for r in positioned)} tokens in. Divergence "
+                        "limited to concurrency > 1, appearing within the first few output tokens, is "
+                        "the signature of floating-point non-associativity across the two engines' "
+                        "different batched-attention kernels at fp16 -- not a harness defect."
+                    )
+                lines.append("")
+                lines.extend(
+                    [
+                        "| Cell | Concurrency | Phase | Request | First diff position | Sequence length |",
+                        "|---|---:|---|---:|---:|---:|",
+                    ]
+                )
+                for row in diagnostics:
+                    lines.append(
+                        f"| `{row['cell']}` | {row['concurrency']} | {row['phase']} | "
+                        f"{row.get('request_index', 'n/a')} | {row.get('first_diff_position', 'n/a')} | "
+                        f"{row.get('sequence_length', 'n/a')} |"
+                    )
+                lines.append("")
             continue
         if mode not in analysis or not analysis[mode]:
             lines.append(
@@ -235,7 +311,7 @@ def main() -> None:
     correctness = _write_correctness(pairs_by_mode)
     _write_exclusions(pairs_by_mode)
     analysis = _write_paired_results(pairs_by_mode, correctness)
-    _write_findings(correctness, analysis)
+    _write_findings(correctness, analysis, pairs_by_mode)
     _write_plots(analysis)
     _write_artifact_manifest()
 

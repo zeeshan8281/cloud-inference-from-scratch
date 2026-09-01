@@ -1,8 +1,8 @@
 {
   "protocol_version": "sentinel-pilot-v1",
   "protocol_seed": "sentinel-pilot-v1",
-  "git_commit": "dcf7fa7ecb0b1217435a08563d01ab77bb2e2a7f",
-  "git_tree": "886958a9847aad7b7a9dcb3a50176f7639a05c52",
+  "git_commit": "0a36974d70336b7e784ad0e6392d5b2f8846a76b",
+  "git_tree": "235498c9b5a0e1101edf1b28acd751178d365cb2",
   "dirty": false,
   "sources": {
     "modal_app.py": "08f003496220df00b5a6b5ce0d81c72708cb5be19a018c8ba7ff3bf7f5dce7f1",
