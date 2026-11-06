@@ -4,13 +4,24 @@
 
 This protocol will test the combined numerical policy now integrated into both inference paths. The implementation is a candidate awaiting real GPU validation; integration and local tests do not validate it or clear the gate. The existing reduction-policy setting alone is not the completed fix. It does not widen the historical V2 epsilon, reinterpret old results, or claim Protocol V3 execution. The original sentinel pilot and V2 holdout remain stopped. Gate clearance requires both the fresh evaluation below and the complete twenty-pair sentinel pilot.
 
-The integrated candidate is `fixed_tile_linears_fp32_head_fa2_min_query2_v1`: fixed
+The integrated candidate is `fixed_tile_linears_fp32_head_opaque_rmsnorm_fa2_min_query2_v3`: fixed
 16 x 64 x 32 matrix tiles with FP32 accumulation and FP16 outputs for transformer
 projections. The output head uses fixed tiles of four vocabulary rows and all
 2048 reduction elements: FP32 products, a fixed FP64 tree sum, and one final
 FP32 output conversion without an intervening FP16 rounding step.
 The pinned vLLM 0.10.0 FlashAttention 2 path floors the legal `max_query_len`
 upper bound from 1 to 2 while preserving actual query offsets and KV contents.
+All 73 normalization sites use the custom engine's FP32 mean-square/rsqrt,
+FP16 normalized-value rounding, then learned FP16 weight multiplication.
+The vLLM residual path materializes the FP16 residual sum before normalization
+and preserves its original in-place output/residual alias contract. Actual
+normalization callable, parameter and epsilon identities are checked at phase
+boundaries. The eligible vLLM path invokes the unchanged eager normalization
+helper through a CUDA-only opaque `torch.library.custom_op`, with a fresh output
+and fresh contiguous fake tensor metadata. This prevents compiler rewriting
+inside the normalization helper while leaving FP16 residual addition outside
+the boundary. This candidate still requires eager, compiled and CUDA-graph
+validation; declaring an opaque boundary alone does not establish equivalence.
 The candidate is scoped to the pinned unquantized FP16 Qwen2.5-3B model and TP1;
 actual installation, precision, parameter identity and execution evidence must
 pass in both engines. Component diagnostics remain prerequisites for the full

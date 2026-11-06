@@ -41,12 +41,22 @@ def require_vllm_precision(engine) -> list[dict[str, bool]]:
 
 def require_numerical_policy(status: dict, implementation: str) -> dict:
     expected = {"custom": 252, "vllm": 144}.get(implementation)
-    if (expected is None or status.get("policy_id") != "fixed_tile_linears_fp32_head_fa2_min_query2_v1"
+    if (expected is None or status.get("policy_id") != "fixed_tile_linears_fp32_head_opaque_rmsnorm_fa2_min_query2_v3"
             or status.get("implementation") != implementation or status.get("installed") is not True
             or status.get("linears_count") != expected or status.get("expected_linears") != expected
             or any(status.get(key) is not True for key in ("head_installed", "wrappers_active", "parameters_preserved"))
             or status.get("storage_dtype") != "torch.float16" or status.get("output_dtype") != "torch.float32"):
         raise ValueError("actual shared numerical policy installation missing or changed")
+    normalization = status.get("normalization")
+    if (not isinstance(normalization, dict)
+            or normalization.get("implementation") != "custom_fp32_rmsnorm_fp16_residual"
+            or normalization.get("count") != 73 or normalization.get("expected_count") != 73
+            or normalization.get("active") is not True or normalization.get("parameter_identity_preserved") is not True):
+        raise ValueError("actual common normalization policy missing or changed")
+    boundary = ("opaque_custom_op", "cloud_engine::common_rms_norm", True) if implementation == "vllm" else ("eager_torch", None, None)
+    if ((normalization.get("compile_boundary"), normalization.get("operator"), normalization.get("operator_active")) != boundary
+            or (implementation == "vllm" and normalization.get("operator_active") is not True)):
+        raise ValueError("actual normalization compile boundary missing or changed")
     if implementation == "vllm":
         floor = status.get("metadata_floor", {})
         if (floor.get("installed") is not True or floor.get("active") is not True

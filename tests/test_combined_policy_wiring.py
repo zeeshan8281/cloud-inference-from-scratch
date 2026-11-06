@@ -28,10 +28,15 @@ def precision_module():
 
 def status(implementation='custom'):
     count = 252 if implementation == 'custom' else 144
-    return {'installed': True, 'policy_id': 'fixed_tile_linears_fp32_head_fa2_min_query2_v1',
+    return {'installed': True, 'policy_id': 'fixed_tile_linears_fp32_head_opaque_rmsnorm_fa2_min_query2_v3',
             'implementation': implementation, 'linears_count': count, 'expected_linears': count,
             'head_installed': True, 'wrappers_active': True, 'parameters_preserved': True,
             'storage_dtype': 'torch.float16', 'output_dtype': 'torch.float32',
+            'normalization': {'implementation':'custom_fp32_rmsnorm_fp16_residual','count':73,'expected_count':73,
+                              'active':True,'parameter_identity_preserved':True,
+                              'compile_boundary':'opaque_custom_op' if implementation == 'vllm' else 'eager_torch',
+                              'operator':'cloud_engine::common_rms_norm' if implementation == 'vllm' else None,
+                              'operator_active':True if implementation == 'vllm' else None},
             'precision': {'allow_fp16_reduced_precision_reduction': False, 'allow_tf32': False,
                           'float32_matmul_precision': 'highest'},
             'metadata_floor': {'installed': True, 'active': True, 'pinned_version': '0.10.0', 'fa_version': 2}}
@@ -104,6 +109,15 @@ class PolicyGuardTests(unittest.TestCase):
             altered = status('vllm')
             altered[key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
+                module.require_numerical_policy(altered, 'vllm')
+        for normalization in (None, {}, {'implementation':'wrong'},
+                {**status()['normalization'], 'count':72}, {**status()['normalization'], 'active':False},
+                {**status()['normalization'], 'parameter_identity_preserved':False},
+                {**status('vllm')['normalization'], 'operator_active':False},
+                {**status('vllm')['normalization'], 'operator':'wrong'}):
+            altered = status('vllm')
+            altered['normalization'] = normalization
+            with self.subTest(normalization=normalization), self.assertRaises(ValueError):
                 module.require_numerical_policy(altered, 'vllm')
         altered = status('vllm')
         altered['metadata_floor']['active'] = False
