@@ -41,9 +41,10 @@ def validate_fixture(fixture):
 def run(config, output):
     import torch
     import torch.nn.functional as functional
+    from safetensors import safe_open
+
     from cloud_engine import batch_invariant_linear as kernel_module
     from cloud_engine.precision import configure_inference_precision
-    from safetensors import safe_open
 
     if output.exists():
         raise ValueError('refusing evidence overwrite')
