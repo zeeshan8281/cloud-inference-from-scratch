@@ -76,7 +76,7 @@ def head_kernel_policy():
 
 
 def validate_head_contract(x_shape, weight_shape, strides, dtypes, devices):
-    if (len(x_shape) != 2 or x_shape[0] < 1 or x_shape[1] != 2048
+    if (len(x_shape) != 2 or x_shape[0] < 0 or x_shape[1] != 2048
             or weight_shape != (151936, 2048)):
         raise ValueError("head requires actual pinned K2048/N151936")
     if strides != ((2048, 1), (2048, 1)) or dtypes != ("torch.float16",) * 2:
@@ -177,6 +177,9 @@ else:
         m, k = x.shape
         n = weight.shape[0]
         output = torch.empty((m, n), device=x.device, dtype=torch.float32)
+        # Partial prefill can have no sampled rows; no GPU launch is needed.
+        if m == 0:
+            return output
         torch.library.wrap_triton(_fixed_head)[(m, triton.cdiv(n, HEAD_BLOCK_N))](
             x, weight, output, n, HEAD_BLOCK_K, HEAD_BLOCK_N,
             num_warps=HEAD_NUM_WARPS, num_stages=HEAD_NUM_STAGES)
