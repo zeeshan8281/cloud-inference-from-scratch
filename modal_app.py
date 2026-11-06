@@ -61,13 +61,16 @@ def _source_commit() -> str:
         ).strip()
         digest = sha256()
         paths = [Path(__file__), Path(__file__).parent / "engine_config.json"]
+        debugger = Path(__file__).parent / "debugger_app.py"
+        if debugger.is_file():
+            paths.append(debugger)
         experiment_runner = Path(__file__).parent / "experiment.py"
         if experiment_runner.is_file():
             paths.append(experiment_runner)
         controlled_runner = Path(__file__).parent / "experiments/controlled.py"
         if controlled_runner.is_file():
             paths.append(controlled_runner)
-        for directory in ("src", "benchmarks", "tests"):
+        for directory in ("src", "benchmarks", "tests", "experiments"):
             paths.extend(sorted((Path(__file__).parent / directory).rglob("*.py")))
         for path in paths:
             digest.update(path.relative_to(Path(__file__).parent).as_posix().encode())
@@ -1988,28 +1991,11 @@ def sentinel_self_consistency_check(mode: str = "resource_normalized") -> None:
     result = _sentinel_self_consistency_check.remote(mode)
     print(json.dumps(result, indent=2))
 
-
 def _run_diagnostic_child(config: dict, workdir: Path) -> dict:
-    workdir.mkdir(parents=True, exist_ok=True)
-    config_path = workdir / "config.json"
-    output_path = workdir / "output.json"
-    config_path.write_text(json.dumps(config))
-    stdout_path = workdir / "stdout.log"
-    stderr_path = workdir / "stderr.log"
-    with open(stdout_path, "w") as out, open(stderr_path, "w") as err:
-        try:
-            completed = subprocess.run(
-                [sys.executable, "/root/experiments/sentinel_diagnostics.py", str(config_path), str(output_path)],
-                stdout=out,
-                stderr=err,
-                env=dict(os.environ, PYTHONPATH="/root"),
-                timeout=300,
-            )
-        except subprocess.TimeoutExpired:
-            return {"crashed": True, "stderr_tail": "timed out after 300s"}
-    if completed.returncode != 0:
-        return {"crashed": True, "stderr_tail": stderr_path.read_text()[-4000:]}
-    return {"crashed": False, "result": json.loads(output_path.read_text())}
+    # Non-diagnostic images do not ship the sentinel module.
+    from experiments.sentinel_diagnostics import run_diagnostic_child
+
+    return run_diagnostic_child(config, workdir)
 
 
 @app.function(

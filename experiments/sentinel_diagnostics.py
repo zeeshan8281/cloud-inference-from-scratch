@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -355,6 +357,8 @@ async def run_custom_diagnostic(
             "pack_calls": len(captured_packs),
             "logit_calls": len(captured_logits),
             "sampled_request_ids_seen": [list(pack.sampled_request_ids) for pack in captured_packs],
+            "forward_plans": list(runner.forward_plans),
+            "target_request_id": target_id,
         },
     }
 
@@ -434,6 +438,30 @@ def run_hf_diagnostic(model_dir: str, dtype: str, batch_ids: list[list[int]]) ->
     token_ids = output.sequences[0, input_ids.shape[1]:].tolist()
     per_step_top_k = [top_k_from_logits(step_logits[0].float().tolist()) for step_logits in output.logits]
     return {"output_tokens": token_ids, "top_k": per_step_top_k, "verified": True}
+
+
+
+def run_diagnostic_child(config: dict, workdir: Path) -> dict:
+    workdir.mkdir(parents=True, exist_ok=True)
+    config_path = workdir / "config.json"
+    output_path = workdir / "output.json"
+    config_path.write_text(json.dumps(config))
+    stdout_path = workdir / "stdout.log"
+    stderr_path = workdir / "stderr.log"
+    with open(stdout_path, "w") as out, open(stderr_path, "w") as err:
+        try:
+            completed = subprocess.run(
+                [sys.executable, "/root/experiments/sentinel_diagnostics.py", str(config_path), str(output_path)],
+                stdout=out,
+                stderr=err,
+                env=dict(os.environ, PYTHONPATH="/root"),
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            return {"crashed": True, "stderr_tail": "timed out after 300s"}
+    if completed.returncode != 0:
+        return {"crashed": True, "stderr_tail": stderr_path.read_text()[-4000:]}
+    return {"crashed": False, "result": json.loads(output_path.read_text())}
 
 
 def main() -> None:

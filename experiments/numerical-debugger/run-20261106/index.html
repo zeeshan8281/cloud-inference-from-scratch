@@ -1,0 +1,47 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Numerical divergence study</title><style>body{font:16px system-ui;background:#f5f6fa;color:#121629;margin:40px auto;max-width:1200px;padding:24px}h1{font-size:40px}table{border-collapse:collapse;width:100%;background:white}td,th{text-align:left;padding:16px;border-bottom:1px solid #ddd}pre{white-space:pre-wrap;overflow-wrap:anywhere}small{color:#555}</style>
+<h1>Numerical divergence study</h1><p>First disagreement. Shared prefix. No invented probabilities.</p><div style="overflow:auto"><table><thead><tr><th>Comparison</th><th>Status</th><th>Position</th><th>Margins</th><th>Intersection max Δ log p</th></tr></thead><tbody><tr><td>Cross-engine / original</td><td>diverged</td><td>0</td><td>0.0147972 / 0.0000000</td><td>0.0094150</td></tr><tr><td>Cross-engine / target_first</td><td>exact_in_observed_window</td><td>—</td><td>0.0777321 / 0.0781250</td><td>0.0106478</td></tr><tr><td>Cross-engine / solo</td><td>exact_in_observed_window</td><td>—</td><td>0.0760174 / 0.0937500</td><td>0.0115849</td></tr><tr><td>Cross-engine / repeat</td><td>diverged</td><td>0</td><td>0.0147972 / 0.0000000</td><td>0.0094150</td></tr><tr><td>custom / order sensitivity</td><td>exact_in_observed_window</td><td>—</td><td>0.0777321 / 0.0777321</td><td>0.0000000</td></tr><tr><td>custom / repeatability</td><td>exact_in_observed_window</td><td>—</td><td>0.0777321 / 0.0777321</td><td>0.0000000</td></tr><tr><td>vllm / order sensitivity</td><td>diverged</td><td>0</td><td>0.0000000 / 0.0156250</td><td>0.0089192</td></tr><tr><td>vllm / repeatability</td><td>exact_in_observed_window</td><td>—</td><td>0.0781250 / 0.0781250</td><td>0.0000000</td></tr><tr><td>Cross-engine / shared-prefix re-prefill</td><td>exact_in_observed_window</td><td>—</td><td>0.2210102 / 0.2187500</td><td>0.0105954</td></tr></tbody></table></div><h2>Evidence boundaries</h2><ul><li>One diagnosed sentinel request, not a new sealed holdout or quality certification.</li><li>Top-k intersection metrics are not full-vocabulary error bounds.</li><li>Observed batch sensitivity does not identify a causal kernel operation.</li><li>Instrumentation and fresh-process diagnostic configuration differ from the full pilot.</li><li>Shared-prefix probes re-prefill a modified target input; they do not preserve decode cache state.</li></ul><p>unchanged; stopped pilot and V2 holdout remain stopped</p><h2>Recorded environment</h2><pre>{
+  &quot;started_utc&quot;: &quot;2026-11-06T08:39:40.265871+00:00&quot;,
+  &quot;source&quot;: &quot;174715839aa256a2010b21a796da716cae1a46f4+tree-c57804e1356d&quot;,
+  &quot;model&quot;: {
+    &quot;id&quot;: &quot;Qwen/Qwen2.5-3B&quot;,
+    &quot;revision&quot;: &quot;3aab1f1954e9cc14eb9509a215f9e5ca08227a9b&quot;,
+    &quot;dtype&quot;: &quot;float16&quot;,
+    &quot;max_model_len&quot;: 4096,
+    &quot;max_output_tokens&quot;: 256,
+    &quot;eos_token_id&quot;: 151643
+  },
+  &quot;gpu&quot;: {
+    &quot;uuid&quot;: &quot;GPU-d795209d-2683-a09f-a1dc-5602fa1658bd&quot;,
+    &quot;name&quot;: &quot;NVIDIA L4&quot;,
+    &quot;pci.bus_id&quot;: &quot;[Unknown Error]&quot;,
+    &quot;driver_version&quot;: &quot;610.57.04&quot;,
+    &quot;memory.total&quot;: &quot;23034 MiB&quot;,
+    &quot;memory.used&quot;: &quot;6 MiB&quot;,
+    &quot;memory.free&quot;: &quot;22587 MiB&quot;,
+    &quot;power.draw&quot;: &quot;17.82 W&quot;,
+    &quot;power.limit&quot;: &quot;72.00 W&quot;,
+    &quot;temperature.gpu&quot;: &quot;64&quot;,
+    &quot;pstate&quot;: &quot;P8&quot;,
+    &quot;clocks.sm&quot;: &quot;210 MHz&quot;,
+    &quot;clocks.mem&quot;: &quot;405 MHz&quot;,
+    &quot;clocks_throttle_reasons.active&quot;: &quot;0x0000000000000001&quot;,
+    &quot;cuda_version&quot;: &quot;12.6&quot;,
+    &quot;utc_timestamp&quot;: &quot;2026-11-06T08:39:40.319642+00:00&quot;,
+    &quot;monotonic_timestamp&quot;: 11.49112258
+  },
+  &quot;packages&quot;: {
+    &quot;torch&quot;: &quot;2.7.1&quot;,
+    &quot;triton&quot;: &quot;3.3.1&quot;,
+    &quot;vllm&quot;: &quot;0.10.0&quot;,
+    &quot;transformers&quot;: &quot;4.53.2&quot;,
+    &quot;tokenizers&quot;: &quot;0.21.2&quot;
+  },
+  &quot;window_tokens&quot;: 3,
+  &quot;scope&quot;: &quot;original c8 prompt/order; diagnostic engine settings, fresh subprocesses&quot;,
+  &quot;finished_utc&quot;: &quot;2026-11-06T08:45:25.142871+00:00&quot;,
+  &quot;gpu_identity_stable&quot;: true,
+  &quot;gpu_uuids&quot;: [
+    &quot;GPU-d795209d-2683-a09f-a1dc-5602fa1658bd&quot;
+  ]
+}</pre><small>Raw SHA-256: 75ca9f11a67addf1f6eefeed8adff5648265dbf8c95c8c66254d31d88605dcf1</small></html>

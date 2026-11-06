@@ -1,0 +1,215 @@
+{
+  "source": "174715839aa256a2010b21a796da716cae1a46f4+tree-c57804e1356d",
+  "ordered_sources": [
+    {
+      "path": "modal_app.py",
+      "sha256": "50b2cbb37e9c08f78b84ac34588c6c82202d79e6460784dd0fdf980c2129c1cd"
+    },
+    {
+      "path": "engine_config.json",
+      "sha256": "e07d57e526cb8b2dd8f271449ded0a61bbe10df3d292c5b2491411c754ce8053"
+    },
+    {
+      "path": "debugger_app.py",
+      "sha256": "fc8667ee17fe7bd0242908088ea907f3d19aced86366eaca62683bf84cb4dcb0"
+    },
+    {
+      "path": "experiment.py",
+      "sha256": "1492290781576839c4855acb53b1365fe54fb97ba6473513961bbc0e8dea6ec9"
+    },
+    {
+      "path": "experiments/controlled.py",
+      "sha256": "a79347c23d07eafec71d65ef27205513bcffd5af4e1189540d7f6b31563336eb"
+    },
+    {
+      "path": "src/cloud_engine/__init__.py",
+      "sha256": "f3ab932d5263ca4a69a1e1bf46307fc74ffcd49d0a272ef1d1c2498f4b80ca55"
+    },
+    {
+      "path": "src/cloud_engine/api.py",
+      "sha256": "f0b8d56679e56cf93cc843fc1b85c64c0959ca8f6a9594ddea75ed6972aacfa6"
+    },
+    {
+      "path": "src/cloud_engine/attention.py",
+      "sha256": "bdd1b5478223c180e15b48fedec7412202789382823274c22b9efb5fb753fde7"
+    },
+    {
+      "path": "src/cloud_engine/cache.py",
+      "sha256": "5d862f405efb0ea124899888843747b49794ab76157129e0f2efb7c8379007eb"
+    },
+    {
+      "path": "src/cloud_engine/cli.py",
+      "sha256": "5cf802125efedbd7226b6436103d37d8b3c668826e448629c558631b0822150f"
+    },
+    {
+      "path": "src/cloud_engine/config.py",
+      "sha256": "9e02ae6515b05941588a9b7cc46d9a3b9cd32a13a9eb4c63be696c83fc0291b7"
+    },
+    {
+      "path": "src/cloud_engine/engine.py",
+      "sha256": "1b2f3a4f998032aa047ac551ffb9de1a9ba7e26254432202009422fee1e0b431"
+    },
+    {
+      "path": "src/cloud_engine/kernel.py",
+      "sha256": "5284c58165329155b433de5dad046ffd100c19deb0f0bae8c37b1eb80e1d1d7f"
+    },
+    {
+      "path": "src/cloud_engine/metrics.py",
+      "sha256": "24445c2c3781921ba31c4a2e8d1b286b6adbd84a0fbd2ba3e3935b9944a47ce3"
+    },
+    {
+      "path": "src/cloud_engine/model.py",
+      "sha256": "200fab7bd22fc3bbf7ca852d9a9c1dc50b51d26bcb1d737704a7bbca0a0857ab"
+    },
+    {
+      "path": "src/cloud_engine/profiling.py",
+      "sha256": "6f7a3b979a016b19fea4c5de9bc3d80235f984cbbd5a28d46b6bd0b5987e9224"
+    },
+    {
+      "path": "src/cloud_engine/scheduler.py",
+      "sha256": "1726c26d755d626273c059bec6c08d25fa25c95591b70e8c3f6954c232585755"
+    },
+    {
+      "path": "src/cloud_engine/weights.py",
+      "sha256": "9a725c4c0d094753f11cc7a8a34ecf55bb7e8b726d0bbf6b58ec04c242d03e79"
+    },
+    {
+      "path": "benchmarks/__init__.py",
+      "sha256": "609272edff666cee65acb27dd5d7a96a33b1128684cbbdb4a5812b1360919df6"
+    },
+    {
+      "path": "benchmarks/online.py",
+      "sha256": "3cdd9ebd332d1482ccfad444bbfbdad0391e0964441299927776a9a38a4f85d5"
+    },
+    {
+      "path": "benchmarks/profile_ragged.py",
+      "sha256": "127059e5c2e179e425b89f569be52e59142d5bab5406e10702151d2efec8e85a"
+    },
+    {
+      "path": "benchmarks/run.py",
+      "sha256": "e80f96a7b122d83c74e9f02e1b3c8c26f232bbd0948c37929ea757d1649ad3f4"
+    },
+    {
+      "path": "tests/remote_gpu_tests.py",
+      "sha256": "4f37b23266bfd1161c2ed122cd1ff1cd6cf749dba625e4515dfcbd588fb59459"
+    },
+    {
+      "path": "tests/remote_ragged_gpu_tests.py",
+      "sha256": "49baecd93976ee860cce08085fb682ca52c7ad44157110ab1fbbfd7aa812e6b1"
+    },
+    {
+      "path": "tests/test_allocator.py",
+      "sha256": "d73338e12d10dc973cc2c960a24fb52c849060078c3ddd03e17efc1cf502dc31"
+    },
+    {
+      "path": "tests/test_api.py",
+      "sha256": "4097c62dc227d524e4de58214425f8d31ee396914db907465d08f69a98f54c74"
+    },
+    {
+      "path": "tests/test_artifacts.py",
+      "sha256": "1ff7acaeb4d499d63aa03e40c2c5cc2f27320df3bfff4fc535401fc32fee3a0e"
+    },
+    {
+      "path": "tests/test_benchmarks.py",
+      "sha256": "f330044effce91e2937f6de7ef6cec941a2b365f90f38c68625512616cc45680"
+    },
+    {
+      "path": "tests/test_cli.py",
+      "sha256": "a18e83e1bfc3015f6fc6c97d5627086e7ce2a93a7c89514f9acab020ed3e200a"
+    },
+    {
+      "path": "tests/test_controlled.py",
+      "sha256": "05089283e3dc8d8bf687fb459d32175c8b41231ed408ae86339dffb953516fa0"
+    },
+    {
+      "path": "tests/test_controlled_accounting.py",
+      "sha256": "2f864c71e47dd08b622387c79b3b001554d492059ed7080fd4fdacbd0d1f814f"
+    },
+    {
+      "path": "tests/test_metrics.py",
+      "sha256": "dba059c3afa8834d3bffe2d9396404e3a883c091afc376940503e0b0354554f6"
+    },
+    {
+      "path": "tests/test_numerical_debugger.py",
+      "sha256": "919aa1dacbc2a211716df8bac3e559d1e54f72df40ed64a16154fd2fd0f994af"
+    },
+    {
+      "path": "tests/test_profiling.py",
+      "sha256": "fbe720d6ef9e1bd709dc6724a4455f9027664d5083fb56ae1c4acc041a8530d6"
+    },
+    {
+      "path": "tests/test_protocol_v2.py",
+      "sha256": "1559d218a5f99872bda07d6844bc86aa92179b46b622ad079484a51548df3325"
+    },
+    {
+      "path": "tests/test_ragged_scheduler.py",
+      "sha256": "a614041ae196210ca2e0f9ef72686b81c5fba308f5c79d95fae4199094096968"
+    },
+    {
+      "path": "tests/test_redis_admission.py",
+      "sha256": "74e64527a46396bd7a6548d441cc6b7eecd34d7601f2e0b06486a9c31cea1b07"
+    },
+    {
+      "path": "tests/test_report.py",
+      "sha256": "0c45c44d006b25e5a624632d1aa900eead76eaf9c7cb451db5285744c44dd6b6"
+    },
+    {
+      "path": "tests/test_scheduler.py",
+      "sha256": "517d713b5a75d1eaf18ab0e3a2b0b85dd59c1b3ace17e5933ed3128912fbc113"
+    },
+    {
+      "path": "tests/test_sentinel_diagnostics.py",
+      "sha256": "c95bd99782304158b08dc055db8e5abf7bba5a436995bc06ed52cb1cfd9773e6"
+    },
+    {
+      "path": "tests/test_sentinel_pilot.py",
+      "sha256": "ae4e3d264687dfb7166a1549868eff99193df4a1d1b1d25cbd193eb9ae92dd25"
+    },
+    {
+      "path": "tests/test_sentinel_report.py",
+      "sha256": "a0db9ff24389911cc0d9e2e5336980b2f0922c2bbfa1eede91262a79948d5b93"
+    },
+    {
+      "path": "tests/test_ui.py",
+      "sha256": "11fd1fbb43c5bb5c91b753260fe5293137226355b487fbe8267e04e651c646fd"
+    },
+    {
+      "path": "experiments/__init__.py",
+      "sha256": "e79341ece235a0c83bdc21768d19d3f39c3fd53aff13330f51c49575a9e632da"
+    },
+    {
+      "path": "experiments/controlled.py",
+      "sha256": "a79347c23d07eafec71d65ef27205513bcffd5af4e1189540d7f6b31563336eb"
+    },
+    {
+      "path": "experiments/numerical_debugger.py",
+      "sha256": "730bdf260ec06792fa616d453b68fee4340e7a6a84d9da3da0384edb09b1501e"
+    },
+    {
+      "path": "experiments/protocol_v2.py",
+      "sha256": "8e84210212d472cd590912d9ef7d3738a968c12c9f568d1b9dfdc8fe06b181b5"
+    },
+    {
+      "path": "experiments/report.py",
+      "sha256": "295dcfa0c6f782d2e70c6ccd4d1ea3fe6e0c35123d5751045afd4e2da92eee5a"
+    },
+    {
+      "path": "experiments/sentinel_diagnostics.py",
+      "sha256": "bf76a6cd77f5cb600fd495f1e8f83310d0692f5d7eebaf14c04afe74febc7729"
+    },
+    {
+      "path": "experiments/sentinel_pilot.py",
+      "sha256": "9c56298ba80e2df313020ebc127eb0391ea1b2f47dbc567c8dcf9c3977891c2f"
+    },
+    {
+      "path": "experiments/sentinel_report.py",
+      "sha256": "8f9432b5741dc6cea4426185bfa8c9930564b092a7ad8d15f50f127e556a3ebb"
+    },
+    {
+      "path": "experiments/starter.py",
+      "sha256": "55f0a41e7ab914e501648a81dd226215ea63a8d8014214f3ace087a239947ccf"
+    }
+  ],
+  "combined_sha256": "c57804e1356dd28aade1074514e90742a92af85abff7bf712b9186c65784c77d",
+  "reconstruction": "Apply executed-source.patch to the delivered source before comparing hashes. Duplicate controlled.py entry follows the original fingerprint algorithm."
+}
