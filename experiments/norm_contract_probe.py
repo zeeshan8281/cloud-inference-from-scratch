@@ -41,12 +41,13 @@ def run(config, output):
     try:
         import torch
         import vllm
+        from safetensors import safe_open
+        from vllm.model_executor.layers.layernorm import RMSNorm
+
         from cloud_engine.attention import rms_norm
         from cloud_engine.numerical_policy import POLICY_ID, _norm_forward, _normalization_records
         from cloud_engine.opaque_normalization import OPERATOR_NAME, opaque_rms_norm
         from cloud_engine.precision import configure_numerical_policy_precision, precision_status
-        from safetensors import safe_open
-        from vllm.model_executor.layers.layernorm import RMSNorm
         configure_numerical_policy_precision()
         torch.set_grad_enabled(False)
         fixture_path, model_dir = Path(config['fixture_path']), Path(config['model_dir'])

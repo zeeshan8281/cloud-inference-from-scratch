@@ -147,6 +147,7 @@ def child(config, fixture_bytes, model):
     import sys
 
     import torch
+
     from experiments.parallel_validation import run_cancellable_process
     from experiments.sentinel_pilot import gpu_state_snapshot, resolved_dependency_versions
     root = Path(tempfile.mkdtemp(prefix='rmsnorm-replay-'))
