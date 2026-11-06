@@ -273,6 +273,7 @@ async def run_custom_diagnostic(
 
     from cloud_engine.config import build_config
     from cloud_engine.engine import InferenceEngine, RequestHandle
+    from cloud_engine.precision import precision_status
     from cloud_engine.scheduler import GenerationConfig
 
     config = build_config(
@@ -353,6 +354,7 @@ async def run_custom_diagnostic(
         "output_tokens": target_tokens,
         "top_k": per_step_top_k[: len(target_tokens)],
         "verified": verified,
+        "inference_precision": precision_status(),
         "debug": {
             "pack_calls": len(captured_packs),
             "logit_calls": len(captured_logits),
@@ -372,7 +374,10 @@ def run_vllm_diagnostic(
 ) -> dict:
     from vllm import EngineArgs, LLMEngine, SamplingParams
 
+    from cloud_engine.precision import require_vllm_precision
+
     args = EngineArgs(
+        worker_extension_cls=engine_options.get("worker_extension_cls", "cloud_engine.vllm_precision_worker.PrecisionWorker"),
         model=model_dir,
         tokenizer=model_dir,
         dtype=engine_options.get("dtype", "half"),
@@ -388,6 +393,7 @@ def run_vllm_diagnostic(
         enforce_eager=engine_options.get("enforce_eager", True),
     )
     engine = LLMEngine.from_engine_args(args)
+    worker_precision = require_vllm_precision(engine)
     params = SamplingParams(
         temperature=0, top_p=1, top_k=-1, max_tokens=STEPS, ignore_eos=True, logprobs=TOP_K
     )
@@ -410,7 +416,7 @@ def run_vllm_diagnostic(
     for step_logprobs in (target.logprobs or [])[:STEPS]:
         ranked = sorted(step_logprobs.items(), key=lambda item: item[1].logprob, reverse=True)
         per_step_top_k.append([(token_id, entry.logprob) for token_id, entry in ranked[:TOP_K]])
-    return {"output_tokens": token_ids, "top_k": per_step_top_k, "verified": True}
+    return {"output_tokens": token_ids, "top_k": per_step_top_k, "verified": True, "inference_precision": worker_precision}
 
 
 def run_hf_diagnostic(model_dir: str, dtype: str, batch_ids: list[list[int]]) -> dict:

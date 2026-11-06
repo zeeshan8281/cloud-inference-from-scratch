@@ -11,8 +11,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import math
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import experiments.sentinel_pilot as sentinel_pilot
@@ -31,9 +34,11 @@ from experiments.sentinel_pilot import (
     plan_common_kv_capacity,
     prompt_seed,
     sentinel_token_ids,
+    warmup_converged,
     warmup_to_convergence,
     workload_hash,
 )
+from tests.test_combined_policy_wiring import status as policy_status
 
 REPO_ROOT = Path(__file__).parents[1]
 
@@ -179,6 +184,13 @@ class TestGPUStateParsing(unittest.TestCase):
 
 
 class TestWarmupConvergence(unittest.TestCase):
+    def test_invalid_or_unstable_samples_never_qualify(self) -> None:
+        for samples in ([0, 0, 0], [1, 2, 3], [1, 1], [1, float("nan"), 1],
+                        [1, float("inf"), 1], [-1, -1, -1]):
+            with self.subTest(samples=samples):
+                self.assertFalse(warmup_converged(samples))
+        self.assertTrue(warmup_converged([99, 100, 101]))
+
     def test_stops_once_last_three_samples_are_within_tolerance(self) -> None:
         samples = iter([10.0, 100.0, 50.2, 50.0, 49.9, 999.0])
 
@@ -269,35 +281,55 @@ def statistics_mean_log(pairs: list[tuple[float, float]]) -> float:
 
 
 class TestCorrectnessGate(unittest.TestCase):
-    def test_identical_outputs_do_not_raise(self) -> None:
-        custom = {"cell-a": {"cold": [[1, 2, 3], [4, 5]]}}
-        vllm = {"cell-a": {"cold": [[1, 2, 3], [4, 5]]}}
-        check_token_parity(custom, vllm)  # must not raise
+    def outputs(self, mode="resource_normalized"):
+        phases = ("unique",) if mode == "resource_normalized" else ("cold", "warm")
+        return {cell.name: {phase: [[request] * cell.output_tokens for request in range(cell.concurrency)]
+                           for phase in phases} for cell in sentinel_pilot.SENTINEL_CELLS}
 
-    def test_a_single_token_mismatch_raises_stop_pilot_with_detail(self) -> None:
-        custom = {"cell-a": {"cold": [[1, 2, 3]]}}
-        vllm = {"cell-a": {"cold": [[1, 2, 9]]}}
+    def test_full_identical_outputs_do_not_raise(self) -> None:
+        for mode in sentinel_pilot.COMPARISON_MODES:
+            check_token_parity(self.outputs(mode), self.outputs(mode), mode=mode)
+
+    def test_single_token_mismatch_raises_stop_pilot(self) -> None:
+        custom, vllm = self.outputs(), self.outputs()
+        vllm["in128-out128-c1"]["unique"][0][0] = 9
         with self.assertRaises(StopPilot) as ctx:
-            check_token_parity(custom, vllm)
+            check_token_parity(custom, vllm, mode="resource_normalized")
         self.assertEqual(ctx.exception.kind, "token_mismatch")
-        self.assertEqual(ctx.exception.detail["mismatches"][0]["reason"], "token_mismatch")
 
-    def test_missing_phase_on_one_side_raises(self) -> None:
-        custom = {"cell-a": {"cold": [[1]], "warm": [[1]]}}
-        vllm = {"cell-a": {"cold": [[1]]}}
-        with self.assertRaises(StopPilot):
-            check_token_parity(custom, vllm)
-
-    def test_mismatched_request_counts_raises(self) -> None:
-        custom = {"cell-a": {"cold": [[1], [2]]}}
-        vllm = {"cell-a": {"cold": [[1]]}}
-        with self.assertRaises(StopPilot):
-            check_token_parity(custom, vllm)
+    def test_missing_cells_phases_requests_or_tokens_cannot_pass_even_on_both_sides(self) -> None:
+        for fault in ("empty", "cell", "phase", "request", "token"):
+            outputs = self.outputs("complete_system")
+            if fault == "empty":
+                outputs = {}
+            elif fault == "cell":
+                outputs.pop("in128-out128-c1")
+            elif fault == "phase":
+                outputs["in128-out128-c1"].pop("warm")
+            elif fault == "request":
+                outputs["in512-out128-c8"]["cold"].pop()
+            else:
+                outputs["in128-out128-c1"]["cold"][0].pop()
+            with self.subTest(fault=fault), self.assertRaises(StopPilot) as ctx:
+                check_token_parity(outputs, outputs, mode="complete_system")
+            self.assertEqual(ctx.exception.kind, "incomplete_evidence")
 
 
 class TestRunPhaseStopsOnTimeout(unittest.TestCase):
     """A timed-out request is a stop-rule trigger for this pilot (unlike the
     original nine-cell matrix, which tolerated ablation timeouts)."""
+
+    def setUp(self):
+        self.engine = SimpleNamespace(collective_rpc=lambda method: [policy_status("vllm")] if method == "numerical_policy_status" else [{
+            "observer_active": True, "capture_count": 0, "replay_count": 0}])
+
+    def test_missing_policy_stops_before_execution(self) -> None:
+        engine = SimpleNamespace(collective_rpc=lambda method: [{}] if method == "numerical_policy_status" else [{
+            "observer_active": True, "capture_count": 0, "replay_count": 0}])
+        with mock.patch.object(sentinel_pilot, "_run_vllm_phase") as run, self.assertRaises(StopPilot) as caught:
+            asyncio.run(_run_phase("vllm", engine, [], "missing-policy"))
+        self.assertEqual(caught.exception.kind, "numerical_policy_mismatch")
+        run.assert_not_called()
 
     def test_any_timed_out_record_raises_stop_pilot(self) -> None:
         with mock.patch.object(
@@ -312,7 +344,7 @@ class TestRunPhaseStopsOnTimeout(unittest.TestCase):
             },
         ):
             with self.assertRaises(StopPilot) as ctx:
-                asyncio.run(_run_phase("vllm", engine=None, workload=[], run_id="cell-cold"))
+                asyncio.run(_run_phase("vllm", engine=self.engine, workload=[], run_id="cell-cold"))
         self.assertEqual(ctx.exception.kind, "timeout")
         self.assertEqual(ctx.exception.detail["timed_out_request_indices"], [1])
 
@@ -332,20 +364,43 @@ class TestRunPhaseStopsOnTimeout(unittest.TestCase):
             },
         ):
             with self.assertRaises(StopPilot) as ctx:
-                asyncio.run(_run_phase("vllm", engine=None, workload=[], run_id="cell-cold"))
+                asyncio.run(_run_phase("vllm", engine=self.engine, workload=[], run_id="cell-cold"))
         self.assertEqual(ctx.exception.kind, "timeout")
         self.assertEqual(ctx.exception.detail["timed_out_request_indices"], [1])
 
+    def test_partial_failed_or_misattributed_records_stop(self) -> None:
+        cases = [[], [{"request_index": 0, "output_token_ids": [], "error": None}],
+                 [{"request_index": 0, "output_token_ids": [1], "error": "failed"}],
+                 [{"request_index": 1, "output_token_ids": [1], "error": None}]]
+        for records in cases:
+            with self.subTest(records=records), mock.patch.object(
+                sentinel_pilot, "_run_vllm_phase", return_value={"records": records, "wall_seconds": 1.0}
+            ), self.assertRaises(StopPilot):
+                asyncio.run(_run_phase("vllm", self.engine, [{"request_index": 0, "output_tokens": 1}], "cell-cold"))
+
     def test_no_timeouts_returns_the_phase_result_unchanged(self) -> None:
-        expected = {"records": [{"request_index": 0, "timeout": False}], "wall_seconds": 1.0}
+        expected = {"records": [{"request_index": 0, "timeout": False, "error": None, "output_token_ids": [1]}], "wall_seconds": 1.0}
         with mock.patch.object(sentinel_pilot, "_run_vllm_phase", return_value=expected):
-            result = asyncio.run(_run_phase("vllm", engine=None, workload=[], run_id="cell-cold"))
+            result = asyncio.run(_run_phase("vllm", engine=self.engine, workload=[{"request_index": 0, "output_tokens": 1}], run_id="cell-cold"))
         self.assertEqual(result, expected)
 
 
 class TestProvenanceManifest(unittest.TestCase):
     def test_manifest_has_commit_tree_dirty_flag_and_source_hashes(self) -> None:
-        manifest = build_source_manifest(REPO_ROOT, [REPO_ROOT / "experiments/sentinel_pilot.py"])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "experiments/sentinel_pilot.py"
+            path.parent.mkdir()
+            path.write_bytes((REPO_ROOT / "experiments/sentinel_pilot.py").read_bytes())
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=root, stderr=subprocess.DEVNULL)
+            git("init")
+            git("add", ".")
+            git("-c", "user.name=Unit Test", "-c", "user.email=unit@example.invalid", "commit", "-m", "fixture")
+            manifest = build_source_manifest(root, [path])
+            self.assertFalse(manifest["dirty"])
+            path.write_text("modified source")
+            self.assertTrue(build_source_manifest(root, [path])["dirty"])
         self.assertEqual(len(manifest["git_commit"]), 40)
         self.assertTrue(manifest["git_tree"])
         self.assertIn("dirty", manifest)

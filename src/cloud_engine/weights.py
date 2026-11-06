@@ -168,6 +168,10 @@ def load_model(
         model.requires_grad_(False)
     elif quantization != "none":
         raise ValueError(f"unsupported quantization {quantization!r}")
+    if quantization == "none":
+        from cloud_engine.numerical_policy import install_custom_policy
+
+        install_custom_policy(model)
     return model, dims
 
 

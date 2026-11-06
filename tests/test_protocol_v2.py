@@ -30,6 +30,11 @@ def _result(tokens: list[int], top_k: list[list[tuple[int, float]]], verified: b
     return {"output_tokens": tokens, "top_k": top_k, "verified": verified}
 
 
+def _classify(custom, vllm, **kwargs):
+    # Tiny fixtures declare their window explicitly; real runs default to V2_STEPS.
+    return classify_request(custom, vllm, expected_steps=len(custom["output_tokens"]), **kwargs)
+
+
 class TestSplitBatches(unittest.TestCase):
     def test_calibration_and_holdout_are_fully_disjoint(self) -> None:
         tokenizer = FakeTokenizer()
@@ -116,7 +121,7 @@ class TestAnalyzeAuditEntry(unittest.TestCase):
 
     def test_reports_crash_without_analyzing(self) -> None:
         runs = {"alone_custom": {"crashed": True, "stderr_tail": "boom"}}
-        result = analyze_audit_entry({}, runs, epsilon=0.01)
+        result = analyze_audit_entry({}, runs, epsilon=0.01, expected_steps=1)
         self.assertIn("alone_custom", result["crashed"])
 
     def test_full_analysis_covers_every_variant_and_both_drift_engines(self) -> None:
@@ -137,7 +142,7 @@ class TestAnalyzeAuditEntry(unittest.TestCase):
             "reordered_target_first_custom": self._child([custom_r0, *custom_others]),
             "reordered_target_first_vllm": self._child([vllm_r0, *vllm_others]),
         }
-        result = analyze_audit_entry(variants, runs, epsilon=0.05)
+        result = analyze_audit_entry(variants, runs, epsilon=0.05, expected_steps=len(custom_r0["output_tokens"]))
         self.assertEqual(set(result["per_variant"]), {"alone", "original", "reordered_target_first"})
         self.assertIsNone(result["per_variant"]["alone"]["custom_identity_check"])
         self.assertIsNotNone(result["per_variant"]["original"]["custom_identity_check"])
@@ -164,12 +169,18 @@ class TestAnalyzeAuditEntry(unittest.TestCase):
             "reordered_target_first_custom": self._child([custom_r0, contaminated]),
             "reordered_target_first_vllm": self._child([vllm_r0, vllm_r1]),
         }
-        result = analyze_audit_entry(variants, runs, epsilon=0.05)
+        result = analyze_audit_entry(variants, runs, epsilon=0.05, expected_steps=len(custom_r0["output_tokens"]))
         self.assertTrue(result["per_variant"]["original"]["custom_identity_check"]["contamination_suspected"])
         self.assertFalse(result["per_variant"]["original"]["vllm_identity_check"]["contamination_suspected"])
 
 
 class TestFirstDisagreement(unittest.TestCase):
+    def test_missing_or_unequal_windows_are_not_exact_match(self) -> None:
+        for custom, vllm in [(_result([], []), _result([], [])),
+                             (_result([1], [[(1, -0.1)]]), _result([1, 2], [[(1, -0.1)], [(2, -0.1)]]))]:
+            with self.assertRaises(ValueError):
+                first_disagreement(custom, vllm)
+
     def test_none_when_tokens_agree(self) -> None:
         custom = _result([1, 2, 3], [[(1, -0.1)], [(2, -0.1)], [(3, -0.1)]])
         vllm = _result([1, 2, 3], [[(1, -0.1)], [(2, -0.1)], [(3, -0.1)]])
@@ -200,16 +211,35 @@ class TestFirstDisagreement(unittest.TestCase):
 
 
 class TestClassifyRequest(unittest.TestCase):
+    def test_missing_truncated_or_invalid_evidence_cannot_pass(self) -> None:
+        good = _result([1] * 8, [[(1, -0.1), (2, -1.0)]] * 8)
+        cases = [
+            _result([], []),
+            _result([1] * 7, [[(1, -0.1)]] * 7),
+            _result([1] * 8, [[(1, -0.1)]] * 7),
+            _result([1] * 8, [[]] * 8),
+            _result([1] * 8, [[(2, -0.1), (1, -1.0)]] * 8),
+            _result([1] * 8, [[(1, -0.1), (1, -1.0)]] * 8),
+        ]
+        for invalid in cases:
+            with self.subTest(invalid=invalid):
+                self.assertEqual(classify_request(invalid, invalid, epsilon=1.0)["verdict"], "hard_failure")
+                self.assertEqual(classify_request(good, invalid, epsilon=1.0)["verdict"], "hard_failure")
+
+    def test_exact_tie_allows_either_actual_maximum(self) -> None:
+        tied = _result([2] * 8, [[(1, -0.1), (2, -0.1)]] * 8)
+        self.assertEqual(classify_request(tied, tied, epsilon=0)["verdict"], "exact_match")
+
     def test_exact_match_when_no_disagreement_and_no_flags(self) -> None:
-        custom = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
-        vllm = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
-        result = classify_request(custom, vllm, epsilon=0.05)
+        custom = _result([1, 2, 3], [[(token, -0.01), (token + 10, -5.0)] for token in (1, 2, 3)])
+        vllm = _result([1, 2, 3], [[(token, -0.01), (token + 10, -5.0)] for token in (1, 2, 3)])
+        result = _classify(custom, vllm, epsilon=0.05)
         self.assertEqual(result["verdict"], "exact_match")
 
     def test_own_top_k_inconsistency_is_a_hard_failure_even_without_disagreement(self) -> None:
         custom = _result([1, 2, 3], [[(1, -0.01)]] * 3, verified=False)
         vllm = _result([1, 2, 3], [[(1, -0.01)]] * 3)
-        result = classify_request(custom, vllm, epsilon=0.05)
+        result = _classify(custom, vllm, epsilon=0.05)
         self.assertEqual(result["verdict"], "hard_failure")
         self.assertIn("custom_disagrees_with_own_top_k", result["reasons"])
 
@@ -223,7 +253,7 @@ class TestClassifyRequest(unittest.TestCase):
         vllm_topk = [(9, -0.015), (1, -0.02), *tail]
         custom = _result([1], [custom_topk])
         vllm = _result([9], [vllm_topk])
-        result = classify_request(custom, vllm, epsilon=0.05)
+        result = _classify(custom, vllm, epsilon=0.05)
         self.assertEqual(result["verdict"], "near_tie_qualified")
 
     def test_confident_disagreement_beyond_epsilon_is_a_hard_failure(self) -> None:
@@ -231,7 +261,7 @@ class TestClassifyRequest(unittest.TestCase):
         vllm_topk = [(9, -0.01), (1, -5.0)]  # large margin: confident
         custom = _result([1], [custom_topk])
         vllm = _result([9], [vllm_topk])
-        result = classify_request(custom, vllm, epsilon=0.05)
+        result = _classify(custom, vllm, epsilon=0.05)
         self.assertEqual(result["verdict"], "hard_failure")
         self.assertIn("confident_disagreement_no_near_tie", result["reasons"])
 
@@ -240,7 +270,7 @@ class TestClassifyRequest(unittest.TestCase):
         vllm_topk = [(9, -0.01), (2, -0.02)]  # vllm's token 9 not in custom's top-k at all
         custom = _result([1], [custom_topk])
         vllm = _result([9], [vllm_topk])
-        result = classify_request(custom, vllm, epsilon=0.5)
+        result = _classify(custom, vllm, epsilon=0.5)
         self.assertEqual(result["verdict"], "hard_failure")
         self.assertIn("vllm_token_missing_from_custom_top_k", result["reasons"])
 
@@ -249,7 +279,7 @@ class TestClassifyRequest(unittest.TestCase):
         vllm_topk = [(i, -0.01 * i) for i in range(100, 120)]
         custom = _result([1], [custom_topk])
         vllm = _result([100], [vllm_topk])
-        result = classify_request(custom, vllm, epsilon=1.0)
+        result = _classify(custom, vllm, epsilon=1.0)
         self.assertEqual(result["verdict"], "hard_failure")
         self.assertIn("low_top_k_overlap", result["reasons"])
 
@@ -259,7 +289,7 @@ class TestClassifyRequest(unittest.TestCase):
         vllm_topk = [(9, -0.015), (1, -0.02), *tail]
         custom = _result([1], [custom_topk])
         vllm = _result([9], [vllm_topk])
-        result = classify_request(custom, vllm, epsilon=None)
+        result = _classify(custom, vllm, epsilon=None)
         self.assertEqual(result["verdict"], "disagreement_unclassified_pending_epsilon")
 
     def test_concurrency_one_disagreement_is_never_tolerated_even_with_a_tiny_margin(self) -> None:
@@ -271,32 +301,32 @@ class TestClassifyRequest(unittest.TestCase):
         vllm_topk = [(9, -0.0001), (1, -0.0002), *tail]
         custom = _result([1], [custom_topk])
         vllm = _result([9], [vllm_topk])
-        result = classify_request(custom, vllm, epsilon=1.0, concurrency=1)
+        result = _classify(custom, vllm, epsilon=1.0, concurrency=1)
         self.assertEqual(result["verdict"], "hard_failure")
         self.assertIn("disagreement_at_concurrency_one", result["reasons"])
 
     def test_batch_vs_solo_drift_is_a_hard_failure_when_flagged(self) -> None:
-        custom = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
-        vllm = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
-        result = classify_request(
+        custom = _result([1, 2, 3], [[(token, -0.01), (token + 10, -5.0)] for token in (1, 2, 3)])
+        vllm = _result([1, 2, 3], [[(token, -0.01), (token + 10, -5.0)] for token in (1, 2, 3)])
+        result = _classify(
             custom, vllm, epsilon=0.05, batch_vs_solo_drift={"drift_detected": True}
         )
         self.assertEqual(result["verdict"], "hard_failure")
         self.assertIn("batch_vs_solo_drift", result["reasons"])
 
     def test_identity_check_contamination_is_a_hard_failure_when_flagged(self) -> None:
-        custom = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
-        vllm = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
-        result = classify_request(
+        custom = _result([1, 2, 3], [[(token, -0.01), (token + 10, -5.0)] for token in (1, 2, 3)])
+        vllm = _result([1, 2, 3], [[(token, -0.01), (token + 10, -5.0)] for token in (1, 2, 3)])
+        result = _classify(
             custom, vllm, epsilon=0.05, identity_check={"contamination_suspected": True, "matching_indices": [2]}
         )
         self.assertEqual(result["verdict"], "hard_failure")
         self.assertIn("cross_request_identity_or_kv_corruption", result["reasons"])
 
     def test_absent_drift_and_identity_checks_do_not_change_prior_behavior(self) -> None:
-        custom = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
-        vllm = _result([1, 2, 3], [[(1, -0.01), (2, -5.0)]] * 3)
-        result = classify_request(custom, vllm, epsilon=0.05)
+        custom = _result([1, 2, 3], [[(token, -0.01), (token + 10, -5.0)] for token in (1, 2, 3)])
+        vllm = _result([1, 2, 3], [[(token, -0.01), (token + 10, -5.0)] for token in (1, 2, 3)])
+        result = _classify(custom, vllm, epsilon=0.05)
         self.assertEqual(result["verdict"], "exact_match")
         self.assertEqual(result["reasons"], [])
 
@@ -315,10 +345,8 @@ class TestProposeEpsilon(unittest.TestCase):
     def test_disqualified_disagreements_are_excluded_from_the_candidate_pool(self) -> None:
         classifications = [
             {"disagreement": {"custom_margin": 0.01, "vllm_margin": 0.01}, "reasons": []},
-            {
-                "disagreement": {"custom_margin": 5.0, "vllm_margin": 5.0},
-                "reasons": ["low_top_k_overlap"],
-            },
+            *({"disagreement": {"custom_margin": 5.0, "vllm_margin": 5.0}, "reasons": [reason]}
+              for reason in ("low_top_k_overlap", "batch_vs_solo_drift", "cross_request_identity_or_kv_corruption")),
         ]
         result = propose_epsilon(classifications)
         self.assertAlmostEqual(result["epsilon"], 0.01)

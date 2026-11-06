@@ -132,7 +132,7 @@ def batch_vs_solo_drift(alone_result: dict[str, Any], batched_result: dict[str, 
     return {"drift_detected": drift_detected, "steps": steps}
 
 
-def analyze_audit_entry(variants: dict[str, dict[str, Any]], runs: dict[str, dict[str, Any]], epsilon: float) -> dict:
+def analyze_audit_entry(variants: dict[str, dict[str, Any]], runs: dict[str, dict[str, Any]], epsilon: float, *, expected_steps: int = V2_STEPS) -> dict:
     """Full diagnostic bundle for one audited request: per-variant
     classification (under the corrected metrics and the already-committed
     epsilon, for comparison against the original sealed verdict only -- not
@@ -161,7 +161,7 @@ def analyze_audit_entry(variants: dict[str, dict[str, Any]], runs: dict[str, dic
             per_variant[variant_name][f"{implementation}_identity_check"] = identity_check
             per_variant[variant_name][f"{implementation}_target"] = target_result
         per_variant[variant_name]["classification"] = classify_request(
-            engine_targets["custom"], engine_targets["vllm"], epsilon=epsilon, concurrency=concurrency
+            engine_targets["custom"], engine_targets["vllm"], epsilon=epsilon, concurrency=concurrency, expected_steps=expected_steps
         )
 
     return {
@@ -186,8 +186,11 @@ def first_disagreement(custom_result: dict[str, Any], vllm_result: dict[str, Any
     otherwise the full diagnostic bundle at the first differing position."""
     custom_tokens = custom_result["output_tokens"]
     vllm_tokens = vllm_result["output_tokens"]
-    window = min(len(custom_tokens), len(vllm_tokens))
-    for position in range(window):
+    if not custom_tokens or len(custom_tokens) != len(vllm_tokens):
+        raise ValueError("missing or unequal output windows")
+    if any(len(result["top_k"]) != len(custom_tokens) for result in (custom_result, vllm_result)):
+        raise ValueError("missing per-token evidence")
+    for position in range(len(custom_tokens)):
         if custom_tokens[position] == vllm_tokens[position]:
             continue
         custom_top_k = custom_result["top_k"][position]
@@ -227,6 +230,7 @@ def classify_request(
     concurrency: int = 2,
     batch_vs_solo_drift: dict[str, Any] | None = None,
     identity_check: dict[str, Any] | None = None,
+    expected_steps: int = V2_STEPS,
 ) -> dict[str, Any]:
     """Per CORRECTNESS_PROTOCOL_V2.md requirements 1, 3 and 5. `epsilon` is
     None during calibration (classification is deferred until it's
@@ -248,18 +252,29 @@ def classify_request(
         reasons.append("batch_vs_solo_drift")
     if identity_check is not None and identity_check.get("contamination_suspected"):
         reasons.append("cross_request_identity_or_kv_corruption")
-    if not custom_result["verified"]:
-        reasons.append("custom_disagrees_with_own_top_k")
-    if not vllm_result["verified"]:
-        reasons.append("vllm_disagrees_with_own_top_k")
-    for step_top_k in custom_result["top_k"]:
-        if not _is_finite(step_top_k):
-            reasons.append("custom_non_finite_logit")
-            break
-    for step_top_k in vllm_result["top_k"]:
-        if not _is_finite(step_top_k):
-            reasons.append("vllm_non_finite_logit")
-            break
+    for implementation, result in (("custom", custom_result), ("vllm", vllm_result)):
+        tokens, top_k = result.get("output_tokens", []), result.get("top_k", [])
+        if expected_steps <= 0 or len(tokens) != expected_steps or len(top_k) != expected_steps:
+            reasons.append(f"{implementation}_incomplete_evidence")
+            continue
+        if not result.get("verified"):
+            reasons.append(f"{implementation}_disagrees_with_own_top_k")
+        for token, ranked in zip(tokens, top_k, strict=True):
+            if not ranked:
+                reasons.append(f"{implementation}_incomplete_evidence")
+                break
+            if not _is_finite(ranked):
+                reasons.append(f"{implementation}_non_finite_logit")
+                break
+            values = dict(ranked)
+            if len(values) != len(ranked) or any(a[1] < b[1] for a, b in zip(ranked, ranked[1:], strict=False)):
+                reasons.append(f"{implementation}_invalid_top_k")
+                break
+            if token not in values or values[token] != ranked[0][1]:
+                reasons.append(f"{implementation}_disagrees_with_own_top_k")
+                break
+    if any(reason.endswith(("incomplete_evidence", "invalid_top_k", "non_finite_logit")) for reason in reasons):
+        return {"verdict": "hard_failure", "disagreement": None, "reasons": reasons}
 
     disagreement = first_disagreement(custom_result, vllm_result)
     if disagreement is None:
@@ -308,22 +323,7 @@ def propose_epsilon(calibration_classifications: list[dict[str, Any]]) -> dict[s
     for entry in calibration_classifications:
         if entry["disagreement"] is None:
             continue
-        disallowed = {
-            "custom_disagrees_with_own_top_k",
-            "vllm_disagrees_with_own_top_k",
-            "custom_non_finite_logit",
-            "vllm_non_finite_logit",
-            "low_top_k_overlap",
-            "custom_token_missing_from_vllm_top_k",
-            "vllm_token_missing_from_custom_top_k",
-            "disagreement_at_concurrency_one",
-            # Cannot occur during calibration (epsilon is None, so
-            # classify_request never adds this reason there), but excluded
-            # defensively in case this is ever called on already-epsilon-
-            # classified data.
-            "confident_disagreement_no_near_tie",
-        }
-        if disallowed & set(entry["reasons"]):
+        if entry["reasons"]:
             continue
         margins = entry["disagreement"]["custom_margin"], entry["disagreement"]["vllm_margin"]
         if None not in margins:
@@ -365,6 +365,52 @@ def summarize(classifications: list[dict[str, Any]]) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+def execution_snapshot(engine, implementation: str) -> dict:
+    """Read installed policy and actual graph operations at a phase boundary."""
+    from cloud_engine.precision import numerical_policy_snapshot
+
+    policy = numerical_policy_snapshot(engine, implementation)
+    if implementation == "custom":
+        graphs = [{"capture_count": engine.runner.cuda_graph_captures,
+                   "replay_count": engine.runner.cuda_graph_replays}]
+    else:
+        graphs = engine.collective_rpc("graph_status")
+    return {"numerical_policy": policy, "graphs": graphs}
+
+
+def execution_after(engine, implementation: str) -> dict:
+    """Observation failure must not erase already completed request records."""
+    try:
+        return execution_snapshot(engine, implementation)
+    except Exception as exc:  # noqa: BLE001 - retained evidence fails host validation
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def validate_execution_evidence(evidence: dict, implementation: str) -> None:
+    """New V2 regression is eager only; historical artifacts stay unchanged."""
+    from cloud_engine.precision import require_numerical_policy
+
+    if implementation not in ("custom", "vllm") or not isinstance(evidence, dict):
+        raise ValueError("missing V2 execution evidence")
+    for phase in ("before", "after"):
+        snapshot = evidence.get(phase, {})
+        if not isinstance(snapshot, dict):
+            raise ValueError("malformed execution snapshot")
+        policy = snapshot.get("numerical_policy")
+        if not isinstance(policy, dict) or (implementation == "vllm" and not isinstance(policy.get("metadata_floor"), dict)):
+            raise ValueError("malformed numerical policy evidence")
+        require_numerical_policy(policy, implementation)
+        graphs = snapshot.get("graphs")
+        if not isinstance(graphs, list) or len(graphs) != 1:
+            raise ValueError("missing TP1 graph evidence")
+        counters = graphs[0]
+        if not isinstance(counters, dict) or (implementation == "vllm" and counters.get("observer_active") is not True):
+            raise ValueError("missing actual graph observer")
+        if any(type(counters.get(key)) is not int or counters[key] != 0
+               for key in ("capture_count", "replay_count")):
+            raise ValueError("historical eager regression requires zero actual graph operations")
+
+
 async def run_custom_full_batch(
     model_dir: str, engine_options: dict[str, Any], batch_ids: list[list[int]], steps: int = V2_STEPS
 ) -> list[dict[str, Any]]:
@@ -377,6 +423,7 @@ async def run_custom_full_batch(
 
     from cloud_engine.config import build_config
     from cloud_engine.engine import InferenceEngine, RequestHandle
+    from cloud_engine.precision import precision_status
     from cloud_engine.scheduler import GenerationConfig
 
     config = build_config(
@@ -422,10 +469,13 @@ async def run_custom_full_batch(
             f"v2-{index}", ids, GenerationConfig(max_output_tokens=steps, temperature=0, eos_token_id=None)
         )
 
+    evidence = {}
     try:
+        evidence["before"] = execution_snapshot(engine, "custom")
         requests = await asyncio.gather(*(submit_one(index, ids) for index, ids in enumerate(batch_ids)))
         handles = [RequestHandle(request, engine) for request in requests]
         await asyncio.gather(*(handle.wait() for handle in handles))
+        evidence["after"] = execution_after(engine, "custom")
     finally:
         runner._pack = original_pack
         runner.model.forward = original_forward
@@ -442,8 +492,10 @@ async def run_custom_full_batch(
     for index, request in enumerate(requests):
         tokens = list(request.generated_token_ids)[:steps]
         top_k = per_request_top_k[request.request_id][: len(tokens)]
-        verified = len(top_k) >= len(tokens) and all(top_k[i][0][0] == tokens[i] for i in range(len(tokens)))
-        results.append({"index": index, "output_tokens": tokens, "top_k": top_k, "verified": verified})
+        verified = len(tokens) == steps and len(top_k) == steps and all(
+            bool(top_k[i]) and dict(top_k[i]).get(tokens[i]) == top_k[i][0][1] for i in range(steps)
+        )
+        results.append({"index": index, "output_tokens": tokens, "top_k": top_k, "verified": verified, "inference_precision": precision_status(), "execution_evidence": evidence})
     return results
 
 
@@ -456,7 +508,10 @@ def run_vllm_full_batch(
 ) -> list[dict[str, Any]]:
     from vllm import EngineArgs, LLMEngine, SamplingParams
 
+    from cloud_engine.precision import require_vllm_precision
+
     args = EngineArgs(
+        worker_extension_cls="cloud_engine.vllm_precision_worker.PrecisionWorker",
         model=model_dir,
         tokenizer=model_dir,
         dtype=engine_options.get("dtype", "half"),
@@ -472,10 +527,13 @@ def run_vllm_full_batch(
         enforce_eager=engine_options.get("enforce_eager", True),
     )
     engine = LLMEngine.from_engine_args(args)
+    worker_precision = require_vllm_precision(engine)
     params = SamplingParams(
         temperature=0, top_p=1, top_k=-1, max_tokens=steps, ignore_eos=True, logprobs=TOP_K
     )
+    evidence = {}
     try:
+        evidence["before"] = execution_snapshot(engine, "vllm")
         for index, ids in enumerate(batch_ids):
             engine.add_request(f"v2-{index}", {"prompt_token_ids": ids}, params)
         finished: dict[str, Any] = {}
@@ -483,6 +541,7 @@ def run_vllm_full_batch(
             for output in engine.step():
                 if output.finished:
                     finished[output.request_id] = output.outputs[0]
+        evidence["after"] = execution_after(engine, "vllm")
     finally:
         shutdown = getattr(engine, "shutdown", None)
         if shutdown is not None:
@@ -496,7 +555,10 @@ def run_vllm_full_batch(
         for step_logprobs in (output.logprobs or [])[:steps]:
             ranked = sorted(step_logprobs.items(), key=lambda item: item[1].logprob, reverse=True)
             top_k.append([(token_id, entry.logprob) for token_id, entry in ranked[:TOP_K]])
-        results.append({"index": index, "output_tokens": tokens, "top_k": top_k, "verified": True})
+        verified = len(tokens) == steps and len(top_k) == steps and all(
+            bool(top_k[i]) and dict(top_k[i]).get(tokens[i]) == top_k[i][0][1] for i in range(steps)
+        )
+        results.append({"index": index, "output_tokens": tokens, "top_k": top_k, "verified": verified, "inference_precision": worker_precision, "execution_evidence": evidence})
     return results
 
 
