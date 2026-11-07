@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -271,6 +273,7 @@ async def run_custom_diagnostic(
 
     from cloud_engine.config import build_config
     from cloud_engine.engine import InferenceEngine, RequestHandle
+    from cloud_engine.precision import precision_status
     from cloud_engine.scheduler import GenerationConfig
 
     config = build_config(
@@ -351,10 +354,13 @@ async def run_custom_diagnostic(
         "output_tokens": target_tokens,
         "top_k": per_step_top_k[: len(target_tokens)],
         "verified": verified,
+        "inference_precision": precision_status(),
         "debug": {
             "pack_calls": len(captured_packs),
             "logit_calls": len(captured_logits),
             "sampled_request_ids_seen": [list(pack.sampled_request_ids) for pack in captured_packs],
+            "forward_plans": list(runner.forward_plans),
+            "target_request_id": target_id,
         },
     }
 
@@ -368,7 +374,10 @@ def run_vllm_diagnostic(
 ) -> dict:
     from vllm import EngineArgs, LLMEngine, SamplingParams
 
+    from cloud_engine.precision import require_vllm_precision
+
     args = EngineArgs(
+        worker_extension_cls=engine_options.get("worker_extension_cls", "cloud_engine.vllm_precision_worker.PrecisionWorker"),
         model=model_dir,
         tokenizer=model_dir,
         dtype=engine_options.get("dtype", "half"),
@@ -384,6 +393,7 @@ def run_vllm_diagnostic(
         enforce_eager=engine_options.get("enforce_eager", True),
     )
     engine = LLMEngine.from_engine_args(args)
+    worker_precision = require_vllm_precision(engine)
     params = SamplingParams(
         temperature=0, top_p=1, top_k=-1, max_tokens=STEPS, ignore_eos=True, logprobs=TOP_K
     )
@@ -406,7 +416,7 @@ def run_vllm_diagnostic(
     for step_logprobs in (target.logprobs or [])[:STEPS]:
         ranked = sorted(step_logprobs.items(), key=lambda item: item[1].logprob, reverse=True)
         per_step_top_k.append([(token_id, entry.logprob) for token_id, entry in ranked[:TOP_K]])
-    return {"output_tokens": token_ids, "top_k": per_step_top_k, "verified": True}
+    return {"output_tokens": token_ids, "top_k": per_step_top_k, "verified": True, "inference_precision": worker_precision}
 
 
 def run_hf_diagnostic(model_dir: str, dtype: str, batch_ids: list[list[int]]) -> dict:
@@ -434,6 +444,30 @@ def run_hf_diagnostic(model_dir: str, dtype: str, batch_ids: list[list[int]]) ->
     token_ids = output.sequences[0, input_ids.shape[1]:].tolist()
     per_step_top_k = [top_k_from_logits(step_logits[0].float().tolist()) for step_logits in output.logits]
     return {"output_tokens": token_ids, "top_k": per_step_top_k, "verified": True}
+
+
+
+def run_diagnostic_child(config: dict, workdir: Path) -> dict:
+    workdir.mkdir(parents=True, exist_ok=True)
+    config_path = workdir / "config.json"
+    output_path = workdir / "output.json"
+    config_path.write_text(json.dumps(config))
+    stdout_path = workdir / "stdout.log"
+    stderr_path = workdir / "stderr.log"
+    with open(stdout_path, "w") as out, open(stderr_path, "w") as err:
+        try:
+            completed = subprocess.run(
+                [sys.executable, "/root/experiments/sentinel_diagnostics.py", str(config_path), str(output_path)],
+                stdout=out,
+                stderr=err,
+                env=dict(os.environ, PYTHONPATH="/root"),
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            return {"crashed": True, "stderr_tail": "timed out after 300s"}
+    if completed.returncode != 0:
+        return {"crashed": True, "stderr_tail": stderr_path.read_text()[-4000:]}
+    return {"crashed": False, "result": json.loads(output_path.read_text())}
 
 
 def main() -> None:

@@ -150,7 +150,17 @@ def decode_attention_batched(
     return out
 
 
-def ragged_attention_direct(
+def ragged_attention_direct(q, k_pool_layer, v_pool_layer, block_tables, query_seq_ids, positions, sm_scale):
+    return _ragged_attention_direct(q, k_pool_layer, v_pool_layer, block_tables, query_seq_ids, positions, sm_scale)
+
+
+def ragged_attention_prevalidated(q, k_pool_layer, v_pool_layer, block_tables, query_seq_ids, positions, sm_scale):
+    """Internal launch after common-attention metadata validates CPU position bounds."""
+    return _ragged_attention_direct(q, k_pool_layer, v_pool_layer, block_tables, query_seq_ids, positions, sm_scale,
+                                    _bounds_validated=True)
+
+
+def _ragged_attention_direct(
     q: Any,
     k_pool_layer: Any,
     v_pool_layer: Any,
@@ -158,6 +168,8 @@ def ragged_attention_direct(
     query_seq_ids: Any,
     positions: Any,
     sm_scale: float,
+    *,
+    _bounds_validated: bool = False,
 ) -> Any:
     """Attention for a flat mixed-query batch over physical KV blocks.
 
@@ -187,7 +199,7 @@ def ragged_attention_direct(
         raise KernelUnsupported("ragged batch cannot be empty")
     # Host synchronization is illegal during CUDA graph capture. Ragged engine
     # config enforces this bound globally; eager direct callers still fail here.
-    if not torch.cuda.is_current_stream_capturing() and int(positions.max().item()) >= SUPPORTED_RAGGED_MAX_SEQ_LEN:
+    if not _bounds_validated and not torch.cuda.is_current_stream_capturing() and int(positions.max().item()) >= SUPPORTED_RAGGED_MAX_SEQ_LEN:
         raise KernelUnsupported(
             f"ragged sequence exceeds {SUPPORTED_RAGGED_MAX_SEQ_LEN} tokens"
         )

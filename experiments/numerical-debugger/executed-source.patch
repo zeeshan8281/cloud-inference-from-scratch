@@ -1,0 +1,17 @@
+--- a/modal_app.py
++++ b/modal_app.py
+@@ -24,0 +25,2 @@
++
++from experiments.sentinel_diagnostics import run_diagnostic_child as _run_diagnostic_child
+@@ -1994,5 +1996 @@
+-def _run_diagnostic_child(config: dict, workdir: Path) -> dict:
+-    # Non-diagnostic images do not ship the sentinel module.
+-    from experiments.sentinel_diagnostics import run_diagnostic_child
+-
+-    return run_diagnostic_child(config, workdir)
++
+--- a/debugger_app.py
++++ b/debugger_app.py
+@@ -91 +91 @@
+-        payload.setdefault("environment", dict(result["environment"]))
++        payload.setdefault("environment", result["environment"])

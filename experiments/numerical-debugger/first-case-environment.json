@@ -1,0 +1,41 @@
+{
+  "started_utc": "2026-11-06T08:39:40.265871+00:00",
+  "source": "174715839aa256a2010b21a796da716cae1a46f4+tree-c57804e1356d",
+  "model": {
+    "id": "Qwen/Qwen2.5-3B",
+    "revision": "3aab1f1954e9cc14eb9509a215f9e5ca08227a9b",
+    "dtype": "float16",
+    "max_model_len": 4096,
+    "max_output_tokens": 256,
+    "eos_token_id": 151643
+  },
+  "gpu": {
+    "uuid": "GPU-d795209d-2683-a09f-a1dc-5602fa1658bd",
+    "name": "NVIDIA L4",
+    "pci.bus_id": "[Unknown Error]",
+    "driver_version": "610.57.04",
+    "memory.total": "23034 MiB",
+    "memory.used": "6 MiB",
+    "memory.free": "22587 MiB",
+    "power.draw": "17.82 W",
+    "power.limit": "72.00 W",
+    "temperature.gpu": "64",
+    "pstate": "P8",
+    "clocks.sm": "210 MHz",
+    "clocks.mem": "405 MHz",
+    "clocks_throttle_reasons.active": "0x0000000000000001",
+    "cuda_version": "12.6",
+    "utc_timestamp": "2026-11-06T08:39:40.319642+00:00",
+    "monotonic_timestamp": 11.49112258
+  },
+  "packages": {
+    "torch": "2.7.1",
+    "triton": "3.3.1",
+    "vllm": "0.10.0",
+    "transformers": "4.53.2",
+    "tokenizers": "0.21.2"
+  },
+  "window_tokens": 3,
+  "scope": "original c8 prompt/order; diagnostic engine settings, fresh subprocesses",
+  "finished_utc": "2026-11-06T08:40:06.527069+00:00"
+}

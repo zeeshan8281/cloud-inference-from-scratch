@@ -231,6 +231,15 @@ def assert_gpu_identity_stable(states: list[dict[str, Any]]) -> None:
 # --------------------------------------------------------------------------
 
 
+def warmup_converged(samples: list[float], minimum: int = WARMUP_MINIMUM,
+                     tolerance: float = WARMUP_TOLERANCE) -> bool:
+    if len(samples) < max(3, minimum):
+        return False
+    window = samples[-3:]
+    return (all(math.isfinite(value) and value > 0 for value in window)
+            and (max(window) - min(window)) / statistics.mean(window) <= tolerance)
+
+
 def warmup_to_convergence(
     measure_throughput: Any,
     minimum: int = WARMUP_MINIMUM,
@@ -244,12 +253,8 @@ def warmup_to_convergence(
     samples: list[float] = []
     for _ in range(maximum):
         samples.append(float(measure_throughput()))
-        if len(samples) >= minimum:
-            window = samples[-3:]
-            mean = statistics.mean(window)
-            span = (max(window) - min(window)) / mean if mean else 0.0
-            if span <= tolerance:
-                break
+        if warmup_converged(samples, minimum, tolerance):
+            break
     return samples
 
 
@@ -407,34 +412,43 @@ def resolved_dependency_versions() -> list[str]:
 def check_token_parity(
     custom_cells: dict[str, dict[str, list[list[int]]]],
     vllm_cells: dict[str, dict[str, list[list[int]]]],
+    *,
+    mode: str,
 ) -> None:
-    """`*_cells` maps cell name -> phase -> list of per-request output token
-    ID lists. Raises StopPilot on any mismatch; the caller is responsible for
-    persisting both engines' raw results before this is called so evidence
-    from a stopped pilot is retained."""
+    """Require the full fixed workload, then exact parity; missing data cannot pass."""
+    if mode not in COMPARISON_MODES:
+        raise ValueError(f"unknown comparison mode: {mode}")
+    expected_phases = {"unique"} if mode == "resource_normalized" else {"cold", "warm"}
+    expected_cells = {cell.name for cell in SENTINEL_CELLS}
     mismatches = []
-    for cell_name, phases in custom_cells.items():
-        other_phases = vllm_cells.get(cell_name, {})
-        for phase_name, custom_outputs in phases.items():
-            vllm_outputs = other_phases.get(phase_name)
-            if vllm_outputs is None:
-                mismatches.append({"cell": cell_name, "phase": phase_name, "reason": "missing_phase"})
-                continue
-            if len(custom_outputs) != len(vllm_outputs):
-                mismatches.append(
-                    {"cell": cell_name, "phase": phase_name, "reason": "request_count_mismatch"}
-                )
-                continue
-            for index, (custom_ids, vllm_ids) in enumerate(zip(custom_outputs, vllm_outputs, strict=True)):
+    for implementation, cells in (("custom", custom_cells), ("vllm", vllm_cells)):
+        if set(cells) != expected_cells:
+            mismatches.append({"implementation": implementation, "reason": "cell_set_mismatch"})
+        for cell in SENTINEL_CELLS:
+            phases = cells.get(cell.name, {})
+            if set(phases) != expected_phases:
+                mismatches.append({"implementation": implementation, "cell": cell.name,
+                                   "reason": "phase_set_mismatch"})
+            for phase in sorted(expected_phases):
+                outputs = phases.get(phase, [])
+                if len(outputs) != cell.concurrency:
+                    mismatches.append({"implementation": implementation, "cell": cell.name,
+                                       "phase": phase, "reason": "request_count_mismatch"})
+                for index, ids in enumerate(outputs):
+                    if len(ids) != cell.output_tokens:
+                        mismatches.append({"implementation": implementation, "cell": cell.name,
+                                           "phase": phase, "request_index": index,
+                                           "reason": "output_length_mismatch"})
+    if mismatches:
+        raise StopPilot("incomplete_evidence", {"mismatches": mismatches})
+    for cell in SENTINEL_CELLS:
+        for phase in sorted(expected_phases):
+            for index, (custom_ids, vllm_ids) in enumerate(zip(
+                custom_cells[cell.name][phase], vllm_cells[cell.name][phase], strict=True
+            )):
                 if custom_ids != vllm_ids:
-                    mismatches.append(
-                        {
-                            "cell": cell_name,
-                            "phase": phase_name,
-                            "request_index": index,
-                            "reason": "token_mismatch",
-                        }
-                    )
+                    mismatches.append({"cell": cell.name, "phase": phase, "request_index": index,
+                                       "reason": "token_mismatch"})
     if mismatches:
         raise StopPilot("token_mismatch", {"mismatches": mismatches})
 
@@ -526,7 +540,10 @@ def _build_custom_engine(model_dir: str, mode: str, kv_plan: KVCapacityPlan | No
 def _build_vllm_engine(model_dir: str, model: dict[str, Any], mode: str, kv_plan: KVCapacityPlan | None):
     from vllm import EngineArgs, LLMEngine
 
+    from cloud_engine.precision import require_vllm_precision
+
     common = dict(
+        worker_extension_cls="cloud_engine.vllm_precision_worker.PrecisionWorker",
         model=model_dir,
         tokenizer=model_dir,
         dtype="half",
@@ -558,7 +575,9 @@ def _build_vllm_engine(model_dir: str, model: dict[str, Any], mode: str, kv_plan
         )
     else:
         raise ValueError(f"unknown comparison mode: {mode}")
-    return LLMEngine.from_engine_args(args)
+    engine = LLMEngine.from_engine_args(args)
+    require_vllm_precision(engine)
+    return engine
 
 
 # --------------------------------------------------------------------------
@@ -710,12 +729,12 @@ def _custom_cache_counters(engine: Any) -> dict[str, Any]:
 
 def _custom_graph_counters(engine: Any) -> dict[str, Any]:
     try:
-        return {
-            "cuda_graph_captures": engine.runner.cuda_graph_captures,
-            "cuda_graph_replays": engine.runner.cuda_graph_replays,
-            "path": "capture_or_replay" if engine.runner.cuda_graph_replays else "eager_fallback",
-            "unresolved": False,
-        }
+        before, after = engine._cie_phase_graph_observation
+        deltas = {key: after[key] - before[key] for key in ("cuda_graph_captures", "cuda_graph_replays")}
+        if any(value < 0 for value in deltas.values()):
+            raise ValueError("Custom CUDA graph counters regressed")
+        return {**deltas, "path": "capture_or_replay" if sum(deltas.values()) else "eager_fallback",
+                "unresolved": False, "before": before, "after": after, "scope": "actual graph operations during this phase"}
     except Exception as exc:  # noqa: BLE001
         return {"unresolved": True, "reason": f"{type(exc).__name__}: {exc}"}
 
@@ -736,25 +755,39 @@ def _vllm_cache_counters(engine: Any) -> dict[str, Any]:
 
 
 def _vllm_graph_counters(engine: Any, mode: str) -> dict[str, Any]:
-    if mode == "resource_normalized":
-        return {"path": "eager_fallback", "unresolved": False}
+    del mode  # Attribute actual execution rather than infer it from configuration.
     try:
-        executor = engine.model_executor
-        runner = executor.driver_worker.model_runner
-        graph_runners = runner.graph_runners
-        captured_shapes = sum(len(virtual_engine) for virtual_engine in graph_runners)
-        return {
-            "captured_shapes": captured_shapes,
-            "path": "capture_or_replay" if captured_shapes else "eager_fallback",
-            "unresolved": False,
-        }
-    except Exception as exc:  # noqa: BLE001
-        return {
-            "unresolved": True,
-            "reason": f"{type(exc).__name__}: {exc}",
-            "note": "vLLM does not publicly expose per-request CUDA graph replay counts; "
-            "graph path attribution is marked unresolved rather than inferred.",
-        }
+        before, after = engine._cie_phase_graph_observation
+        if not before or len(before) != len(after):
+            raise ValueError("Missing or changed graph-observer workers")
+        deltas = []
+        for first, last in zip(before, after, strict=True):
+            if first.get("observer_active") is not True or last.get("observer_active") is not True:
+                raise ValueError("CUDA graph observer is not active")
+            delta = {name: last[name] - first[name] for name in ("capture_count", "replay_count")}
+            if any(value < 0 for value in delta.values()):
+                raise ValueError("CUDA graph counters regressed")
+            deltas.append(delta)
+        return {"path": "capture_or_replay" if any(sum(row.values()) for row in deltas) else "eager_fallback",
+                "unresolved": False, "worker_deltas": deltas, "workers_before": before, "workers_after": after,
+                "scope": "actual CUDA graph operations during this phase; no per-request attribution"}
+    except Exception as exc:  # noqa: BLE001 - unresolved attribution is a stop condition.
+        return {"unresolved": True, "reason": f"{type(exc).__name__}: {exc}"}
+
+
+def _vllm_kv_capacity(engine: Any) -> dict[str, Any]:
+    workers = engine.collective_rpc("kv_capacity")
+    if len(workers) != 1:
+        raise ValueError("KV capacity requires exactly one TP=1 worker")
+    actual = workers[0]
+    blocks = actual.get("num_gpu_blocks")
+    if (type(blocks) is not int or blocks <= 0 or actual.get("tensor_parallel_size") != 1
+            or actual.get("block_sizes") != [16]):
+        raise ValueError(f"Invalid actual worker KV capacity: {actual}")
+    driver_blocks = getattr(getattr(engine, "cache_config", None), "num_gpu_blocks", None)
+    if driver_blocks is not None and driver_blocks != blocks:
+        raise ValueError("Driver and actual worker KV capacities disagree")
+    return actual
 
 
 def _eligible_prefix_tokens(input_tokens: int, block_size: int) -> int:
@@ -791,12 +824,44 @@ def _summarize_phase(phase_result: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _run_phase(implementation: str, engine: Any, workload: list[dict[str, Any]], run_id: str) -> dict:
+    from cloud_engine.precision import numerical_policy_snapshot
+
+    def graph_snapshot():
+        if implementation == "custom":
+            return {"cuda_graph_captures": engine.runner.cuda_graph_captures,
+                    "cuda_graph_replays": engine.runner.cuda_graph_replays}
+        if implementation == "vllm":
+            return engine.collective_rpc("graph_status")
+        raise ValueError(f"unknown implementation: {implementation}")
+
+    try:
+        before_graphs = graph_snapshot()
+    except Exception as exc:  # noqa: BLE001
+        raise StopPilot("graph_path_unresolved", {"run_id": run_id, "reason": str(exc)}) from exc
+    try:
+        before_policy = numerical_policy_snapshot(engine, implementation)
+    except Exception as exc:  # noqa: BLE001
+        raise StopPilot("numerical_policy_mismatch", {"run_id": run_id, "reason": str(exc)}) from exc
     if implementation == "custom":
         phase_result = await _run_custom_phase(engine, workload, run_id)
-    elif implementation == "vllm":
-        phase_result = _run_vllm_phase(engine, workload, run_id)
     else:
-        raise ValueError(f"unknown implementation: {implementation}")
+        phase_result = _run_vllm_phase(engine, workload, run_id)
+    try:
+        after_graphs = graph_snapshot()
+        engine._cie_phase_graph_observation = (before_graphs, after_graphs)
+        graph_evidence = _graph_counters(implementation, engine, "")
+    except Exception as exc:  # noqa: BLE001
+        graph_evidence = {"unresolved": True, "reason": str(exc)}
+    phase_result["graph_counters"] = graph_evidence
+    try:
+        after_policy = numerical_policy_snapshot(engine, implementation)
+        phase_result["numerical_policy"] = {"before": before_policy, "after": after_policy}
+    except Exception as exc:  # noqa: BLE001
+        phase_result["numerical_policy"] = {"before": before_policy, "after": {"error": str(exc)}}
+        raise StopPilot("numerical_policy_mismatch", {"run_id": run_id, "phase_result": phase_result}) from exc
+    if graph_evidence.get("unresolved") is not False:
+        raise StopPilot("graph_path_unresolved", {"run_id": run_id, "phase_result": phase_result,
+                                                  "graph_counters": graph_evidence})
     timed_out = [
         record
         for record in phase_result["records"]
@@ -808,8 +873,20 @@ async def _run_phase(implementation: str, engine: Any, workload: list[dict[str, 
             {
                 "run_id": run_id,
                 "timed_out_request_indices": [record["request_index"] for record in timed_out],
+                "phase_result": phase_result,
             },
         )
+    expected = {record["request_index"]: record["output_tokens"] for record in workload}
+    records = phase_result["records"]
+    if (not expected or len(expected) != len(workload) or len(records) != len(expected)
+            or {record["request_index"] for record in records} != set(expected)):
+        raise StopPilot("incomplete_evidence", {"run_id": run_id, "reason": "request_identity_mismatch", "phase_result": phase_result})
+    for record in records:
+        if record.get("error") is not None:
+            raise StopPilot("request_error", {"run_id": run_id, "phase_result": phase_result})
+        if len(record.get("output_token_ids", [])) != expected[record["request_index"]]:
+            raise StopPilot("incomplete_evidence", {"run_id": run_id, "reason": "output_length_mismatch",
+                                                     "request_index": record["request_index"], "phase_result": phase_result})
     return phase_result
 
 
@@ -834,6 +911,7 @@ async def run_child(
     """Run one fresh child process's full cell/phase plan for `mode` and
     return everything needed for both the correctness gate and the report:
     per-phase records, summaries, cache/graph counters, and environment."""
+    from cloud_engine.precision import precision_status, require_vllm_precision
     from experiments.controlled import environment as environment_metadata
 
     engine_config: dict[str, Any] | None = None
@@ -842,6 +920,7 @@ async def run_child(
         await engine.start()
         tokenizer = engine.tokenizer
         engine_config = {
+            "inference_precision": precision_status(),
             "cuda_graph_decode": config.cuda_graph_decode,
             "prefix_cache_max_blocks": config.prefix_cache_max_blocks,
             "kv_cache_bytes": config.kv_cache_bytes,
@@ -855,28 +934,21 @@ async def run_child(
         engine = _build_vllm_engine(model_dir, model, mode, kv_plan)
         tokenizer = AutoTokenizer.from_pretrained(model_dir)
         try:
-            resolved_num_gpu_blocks = engine.cache_config.num_gpu_blocks
+            worker_kv_capacity = _vllm_kv_capacity(engine)
+            resolved_num_gpu_blocks = worker_kv_capacity["num_gpu_blocks"]
         except Exception as exc:  # noqa: BLE001 - vLLM engine internals vary by version
-            resolved_num_gpu_blocks = None
-            if mode == "resource_normalized":
-                raise StopPilot(
-                    "kv_capacity_unresolved",
-                    {"reason": f"{type(exc).__name__}: {exc}"},
-                ) from exc
-        if mode == "resource_normalized" and resolved_num_gpu_blocks is None:
-            # V1's multiprocess engine can leave cache_config unpopulated in
-            # this process without raising; unable to verify is treated the
-            # same as a blocked KV-capacity match, per protocol.
             raise StopPilot(
                 "kv_capacity_unresolved",
-                {"reason": "engine.cache_config.num_gpu_blocks is None"},
-            )
+                {"reason": f"{type(exc).__name__}: {exc}"},
+            ) from exc
         engine_config = {
+            "inference_precision": require_vllm_precision(engine),
             "enforce_eager": mode == "resource_normalized",
             "enable_prefix_caching": mode == "complete_system",
             "block_size": 16,
             "num_gpu_blocks_override": kv_plan.num_blocks if kv_plan is not None else None,
             "resolved_num_gpu_blocks": resolved_num_gpu_blocks,
+            "worker_kv_capacity": worker_kv_capacity,
         }
         if mode == "resource_normalized" and resolved_num_gpu_blocks != kv_plan.num_blocks:
             raise StopPilot(
@@ -889,43 +961,55 @@ async def run_child(
     else:
         raise ValueError(f"unknown implementation: {implementation}")
 
+    metadata: dict[str, Any] = {}
+    cells_out: dict[str, Any] = {}
+    cell_name: str | None = None
+    warmup_records: list[Any] = []
+    samples: list[float] = []
+    phases_out: dict[str, Any] = {}
+    current_phase_results: dict[str, Any] = {}
     try:
         metadata = environment_metadata(model, tokenizer, "custom-server" if implementation == "custom" else "vllm")
-        cells_out: dict[str, Any] = {}
         for cell_name, cell_workload in workload["cells"].items():
+            phases_out = {}
+            current_phase_results = {}
             # Shape-matched warmup to convergence: run each pre-materialized
             # disjoint warmup iteration and score it, stopping once the last
             # three throughputs span <=WARMUP_TOLERANCE of their mean (capped
             # at len(cell_workload["warmup"]) == WARMUP_MAXIMUM iterations).
-            warmup_records: list[dict[str, Any]] = []
-            samples: list[float] = []
+            warmup_records = []
+            samples = []
             for iteration_workload in cell_workload["warmup"]:
                 phase_result = await _run_phase(
                     implementation, engine, iteration_workload, f"{cell_name}-warmup"
                 )
                 warmup_records.append(phase_result["records"])
                 samples.append(_phase_throughput(phase_result))
-                if len(samples) >= WARMUP_MINIMUM:
-                    window = samples[-3:]
-                    mean = statistics.mean(window)
-                    span = (max(window) - min(window)) / mean if mean else 0.0
-                    if span <= WARMUP_TOLERANCE:
-                        break
+                if warmup_converged(samples):
+                    break
+            if not warmup_converged(samples):
+                raise StopPilot("warmup_not_converged", {
+                    "cell": cell_name, "warmup_throughputs": samples,
+                    "warmup_records": warmup_records, "completed_cells": cells_out,
+                    "environment": metadata, "engine_config": engine_config,
+                    "workload_hash": workload["workload_hash"],
+                })
             warmup_samples = samples
 
-            phases_out: dict[str, Any] = {}
             if mode == "resource_normalized":
                 before = _cache_counters(implementation, engine)
                 phase_result = await _run_phase(
                     implementation, engine, cell_workload["unique"], f"{cell_name}-unique"
                 )
+                current_phase_results["unique"] = phase_result
                 after = _cache_counters(implementation, engine)
                 phases_out["unique"] = {
                     "records": phase_result["records"],
                     "summary": _summarize_phase(phase_result),
                     "cache_counters_before": before,
                     "cache_counters_after": after,
-                    "graph_counters": _graph_counters(implementation, engine, mode),
+                    "graph_counters": phase_result["graph_counters"],
+                    "numerical_policy": phase_result["numerical_policy"],
                     "eligible_prefix_tokens": _eligible_prefix_tokens(
                         cell_workload["unique"][0]["input_tokens"], 16
                     ),
@@ -935,13 +1019,15 @@ async def run_child(
                 cold_result = await _run_phase(
                     implementation, engine, cell_workload["cold"], f"{cell_name}-cold"
                 )
+                current_phase_results["cold"] = cold_result
                 cache_after_cold = _cache_counters(implementation, engine)
                 phases_out["cold"] = {
                     "records": cold_result["records"],
                     "summary": _summarize_phase(cold_result),
                     "cache_counters_before": cache_before_cold,
                     "cache_counters_after": cache_after_cold,
-                    "graph_counters": _graph_counters(implementation, engine, mode),
+                    "graph_counters": cold_result["graph_counters"],
+                    "numerical_policy": cold_result["numerical_policy"],
                     "eligible_prefix_tokens": _eligible_prefix_tokens(
                         cell_workload["cold"][0]["input_tokens"], 16
                     ),
@@ -951,10 +1037,12 @@ async def run_child(
                 prime_result = await _run_phase(
                     implementation, engine, cell_workload["warm"], f"{cell_name}-warm-prime"
                 )
+                current_phase_results["warm_prime"] = prime_result
                 cache_after_prime = _cache_counters(implementation, engine)
                 measured_result = await _run_phase(
                     implementation, engine, cell_workload["warm"], f"{cell_name}-warm-measured"
                 )
+                current_phase_results["warm_measured"] = measured_result
                 cache_after_measured = _cache_counters(implementation, engine)
                 phases_out["warm"] = {
                     "prime_records": prime_result["records"],
@@ -963,7 +1051,10 @@ async def run_child(
                     "cache_counters_before_prime": cache_before_prime,
                     "cache_counters_after_prime": cache_after_prime,
                     "cache_counters_after_measured": cache_after_measured,
-                    "graph_counters": _graph_counters(implementation, engine, mode),
+                    "graph_counters": measured_result["graph_counters"],
+                    "numerical_policy": measured_result["numerical_policy"],
+                    "prime_graph_counters": prime_result["graph_counters"],
+                    "prime_numerical_policy": prime_result["numerical_policy"],
                     "eligible_prefix_tokens": _eligible_prefix_tokens(
                         cell_workload["warm"][0]["input_tokens"], 16
                     ),
@@ -984,6 +1075,16 @@ async def run_child(
             "workload_hash": workload["workload_hash"],
             "cells": cells_out,
         }
+    except StopPilot as exc:
+        # Preserve completed work when a later phase stops; the original
+        # failing phase/detail remains intact alongside this partial checkpoint.
+        raise StopPilot(exc.kind, {**exc.detail, "retained_execution": {
+            "environment": metadata, "engine_config": engine_config,
+            "workload_hash": workload["workload_hash"], "completed_cells": cells_out,
+            "current_cell": cell_name, "warmup_records": warmup_records,
+            "warmup_throughputs": samples, "completed_phases": phases_out,
+            "completed_phase_results": current_phase_results,
+        }}) from exc
     finally:
         if implementation == "custom":
             await engine.close()

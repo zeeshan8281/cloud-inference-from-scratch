@@ -61,13 +61,16 @@ def _source_commit() -> str:
         ).strip()
         digest = sha256()
         paths = [Path(__file__), Path(__file__).parent / "engine_config.json"]
+        debugger = Path(__file__).parent / "debugger_app.py"
+        if debugger.is_file():
+            paths.append(debugger)
         experiment_runner = Path(__file__).parent / "experiment.py"
         if experiment_runner.is_file():
             paths.append(experiment_runner)
         controlled_runner = Path(__file__).parent / "experiments/controlled.py"
         if controlled_runner.is_file():
             paths.append(controlled_runner)
-        for directory in ("src", "benchmarks", "tests"):
+        for directory in ("src", "benchmarks", "tests", "experiments"):
             paths.extend(sorted((Path(__file__).parent / directory).rglob("*.py")))
         for path in paths:
             digest.update(path.relative_to(Path(__file__).parent).as_posix().encode())
@@ -228,6 +231,11 @@ sentinel_image = (
     .add_local_file(
         Path(__file__).parent / "experiments/sentinel_pilot.py",
         "/root/experiments/sentinel_pilot.py",
+        copy=True,
+    )
+    .add_local_file(
+        Path(__file__).parent / "experiments/sentinel_runtime.py",
+        "/root/experiments/sentinel_runtime.py",
         copy=True,
     )
     .add_local_file(
@@ -1687,70 +1695,20 @@ class ApiServer:
 
 
 def _sentinel_torch_cuda_version() -> str | None:
-    try:
-        import torch
-
-        return torch.version.cuda
-    except Exception:
-        return None
+    from experiments.sentinel_runtime import torch_cuda_version
+    return torch_cuda_version()
 
 
 def _sentinel_phase_outputs(child_result: dict) -> dict:
-    cells = {}
-    for cell_name, cell_data in child_result["cells"].items():
-        phases = {}
-        for phase_name, phase_data in cell_data["phases"].items():
-            records = sorted(phase_data["records"], key=lambda record: record["request_index"])
-            phases[phase_name] = [record["output_token_ids"] for record in records]
-        cells[cell_name] = phases
-    return cells
+    from experiments.sentinel_runtime import phase_outputs
+    return phase_outputs(child_result)
 
 
 def _run_sentinel_child(
     implementation: str, mode: str, pair: int, model_dir: str, workload_path: Path, workdir: Path
 ) -> dict:
-    workdir.mkdir(parents=True, exist_ok=True)
-    output_path = workdir / "result.json"
-    stdout_path = workdir / "stdout.log"
-    stderr_path = workdir / "stderr.log"
-    with open(stdout_path, "w") as out, open(stderr_path, "w") as err:
-        completed = subprocess.run(
-            [
-                sys.executable,
-                "/root/experiments/sentinel_pilot.py",
-                implementation,
-                mode,
-                str(pair),
-                model_dir,
-                str(workload_path),
-                str(output_path),
-            ],
-            stdout=out,
-            stderr=err,
-            env=dict(os.environ, PYTHONPATH="/root"),
-        )
-    child = {
-        "implementation": implementation,
-        "returncode": completed.returncode,
-        "stdout_path": str(stdout_path),
-        "stderr_path": str(stderr_path),
-        "crashed": completed.returncode != 0,
-        "stop": None,
-    }
-    if child["crashed"]:
-        stderr_text = stderr_path.read_text()
-        child["stderr_tail"] = stderr_text[-4000:]
-        if "CUDA out of memory" in stderr_text or "OutOfMemoryError" in stderr_text:
-            child["oom"] = True
-    else:
-        payload = json.loads(output_path.read_text())
-        if "stop" in payload:
-            # An orderly in-process stop rule (e.g. a request timeout), not a
-            # crash: the child wrote this itself instead of its full result.
-            child["stop"] = payload["stop"]
-        else:
-            child["result"] = payload
-    return child
+    from experiments.sentinel_runtime import run_child
+    return run_child(implementation, mode, pair, model_dir, workload_path, workdir)
 
 
 @app.function(
@@ -1762,77 +1720,9 @@ def _run_sentinel_child(
     max_containers=1,
 )
 def _sentinel_pair(mode: str, pair: int) -> dict:
-    """One paired sentinel-pilot round: two fresh child processes, one custom
-    and one vLLM, run sequentially inside this single GPU allocation. Odd
-    pairs run custom-then-vLLM; even pairs run the reverse."""
-    from transformers import AutoTokenizer
-
-    from experiments.sentinel_pilot import (
-        SENTINEL_CELLS,
-        StopPilot,
-        assert_gpu_identity_stable,
-        build_pair_workload,
-        check_token_parity,
-        gpu_state_snapshot,
-    )
-
+    from experiments.sentinel_runtime import run_pair
     _print_run_header(f"sentinel pilot pair {pair:02d}: {mode}")
-    model_dir = _prepare_weights(RAGGED_MODEL)
-    tokenizer = AutoTokenizer.from_pretrained(model_dir)
-    workload = build_pair_workload(mode, pair, SENTINEL_CELLS, tokenizer)
-
-    workdir = Path(tempfile.mkdtemp(prefix=f"sentinel-{mode}-pair{pair:02d}-"))
-    workload_path = workdir / "workload.json"
-    workload_path.write_text(json.dumps(workload))
-
-    order = "odd" if pair % 2 == 1 else "even"
-    implementations = ("custom", "vllm") if order == "odd" else ("vllm", "custom")
-    cuda_version = _sentinel_torch_cuda_version()
-
-    result: dict = {
-        "mode": mode,
-        "pair": pair,
-        "order": order,
-        "workload_hash": workload["workload_hash"],
-        "children": [],
-        "stop": None,
-    }
-    gpu_states = [gpu_state_snapshot(cuda_version)]
-    try:
-        for position, implementation in enumerate(implementations, start=1):
-            child = _run_sentinel_child(
-                implementation, mode, pair, model_dir, workload_path, workdir / f"child-{position}"
-            )
-            child["position"] = position
-            result["children"].append(child)
-            gpu_states.append(gpu_state_snapshot(cuda_version))
-            assert_gpu_identity_stable(gpu_states)
-            if child["stop"] is not None:
-                raise StopPilot(
-                    child["stop"]["kind"],
-                    {"implementation": implementation, "position": position, **child["stop"]["detail"]},
-                )
-            if child["crashed"]:
-                raise StopPilot(
-                    "oom" if child.get("oom") else "child_crash",
-                    {
-                        "implementation": implementation,
-                        "position": position,
-                        "returncode": child["returncode"],
-                        "stderr_tail": child["stderr_tail"],
-                    },
-                )
-
-        by_implementation = {child["implementation"]: child["result"] for child in result["children"]}
-        check_token_parity(
-            _sentinel_phase_outputs(by_implementation["custom"]),
-            _sentinel_phase_outputs(by_implementation["vllm"]),
-        )
-    except StopPilot as exc:
-        result["stop"] = exc.as_dict()
-    result["gpu_states"] = gpu_states
-    result["workload"] = workload
-    return result
+    return run_pair(_prepare_weights(RAGGED_MODEL), mode, pair)
 
 
 @app.local_entrypoint()
@@ -1988,28 +1878,11 @@ def sentinel_self_consistency_check(mode: str = "resource_normalized") -> None:
     result = _sentinel_self_consistency_check.remote(mode)
     print(json.dumps(result, indent=2))
 
-
 def _run_diagnostic_child(config: dict, workdir: Path) -> dict:
-    workdir.mkdir(parents=True, exist_ok=True)
-    config_path = workdir / "config.json"
-    output_path = workdir / "output.json"
-    config_path.write_text(json.dumps(config))
-    stdout_path = workdir / "stdout.log"
-    stderr_path = workdir / "stderr.log"
-    with open(stdout_path, "w") as out, open(stderr_path, "w") as err:
-        try:
-            completed = subprocess.run(
-                [sys.executable, "/root/experiments/sentinel_diagnostics.py", str(config_path), str(output_path)],
-                stdout=out,
-                stderr=err,
-                env=dict(os.environ, PYTHONPATH="/root"),
-                timeout=300,
-            )
-        except subprocess.TimeoutExpired:
-            return {"crashed": True, "stderr_tail": "timed out after 300s"}
-    if completed.returncode != 0:
-        return {"crashed": True, "stderr_tail": stderr_path.read_text()[-4000:]}
-    return {"crashed": False, "result": json.loads(output_path.read_text())}
+    # Non-diagnostic images do not ship the sentinel module.
+    from experiments.sentinel_diagnostics import run_diagnostic_child
+
+    return run_diagnostic_child(config, workdir)
 
 
 @app.function(
@@ -2158,6 +2031,71 @@ def _run_protocol_v2_child(config: dict, workdir: Path) -> dict:
     return {"crashed": False, "result": json.loads(output_path.read_text())}
 
 
+def _protocol_v2_preflight(output: str, epsilon: float | None, *, require_frozen: bool) -> dict:
+    """Preserve old evidence and bind reruns to the frozen historical threshold."""
+    import math
+    import re
+
+    from experiments.sentinel_pilot import build_source_manifest
+
+    if Path(output).exists():
+        raise SystemExit(f"refusing to overwrite retained evidence: {output}")
+    if epsilon is not None and (not math.isfinite(epsilon) or epsilon < 0):
+        raise SystemExit("epsilon must be finite and nonnegative")
+    repo = Path(__file__).parent
+    manifest = build_source_manifest(repo, [
+        repo / "modal_app.py", repo / "engine_config.json", repo / "CORRECTNESS_PROTOCOL_V2.md",
+        *sorted((repo / "src").rglob("*.py")), *sorted((repo / "experiments").rglob("*.py")),
+    ])
+    manifest["source_fingerprint"] = SOURCE_COMMIT
+    if SOURCE_COMMIT != _source_commit():
+        raise SystemExit("source changed after the Modal image was defined")
+    if require_frozen:
+        if not SOURCE_COMMIT.startswith(manifest["git_commit"] + "+tree-"):
+            raise SystemExit("Modal image source does not identify the frozen commit")
+        if manifest["dirty"]:
+            raise SystemExit("refusing holdout regression from a dirty source tree")
+        committed = subprocess.check_output(
+            ["git", "show", "HEAD:CORRECTNESS_PROTOCOL_V2.md"], cwd=repo, text=True
+        )
+        matches = re.findall(r"\*\*Committed epsilon[^\n`]*`([^`\n]+)`", committed)
+        if len(matches) != 1:
+            raise SystemExit("cannot identify exactly one committed V2 epsilon")
+        try:
+            committed_epsilon = float(matches[0])
+        except ValueError as exc:
+            raise SystemExit("committed V2 epsilon is not numeric") from exc
+        if not math.isfinite(committed_epsilon) or committed_epsilon < 0 or epsilon != committed_epsilon:
+            raise SystemExit("requested epsilon does not match the committed V2 epsilon")
+        manifest["committed_epsilon"] = committed_epsilon
+        manifest["epsilon_document_sha256"] = sha256(committed.encode()).hexdigest()
+    return manifest
+
+
+def _protocol_v2_child_error(child: dict, config: dict) -> str | None:
+    """Validate identity/count/order before pairing request records across engines."""
+    if child.get("crashed") is not False:
+        return "child_crashed_or_status_missing"
+    payload = child.get("result", {})
+    if payload.get("config") != config:
+        return "child_configuration_mismatch"
+    records = payload.get("result")
+    if not isinstance(records, list) or any(not isinstance(record, dict) for record in records):
+        return "missing_request_records"
+    if [record.get("index") for record in records] != list(range(len(config["batch_ids"]))):
+        return "request_identity_count_or_order_mismatch"
+    from experiments.protocol_v2 import validate_execution_evidence
+
+    try:
+        for record in records:
+            validate_execution_evidence(record.get("execution_evidence"), config["implementation"])
+        if records and any(record["execution_evidence"] != records[0]["execution_evidence"] for record in records):
+            return "inconsistent_batch_execution_evidence"
+    except (KeyError, TypeError, ValueError) as exc:
+        return f"invalid_execution_evidence: {exc}"
+    return None
+
+
 @app.function(
     image=sentinel_image,
     gpu=MODAL_CFG["gpu"],
@@ -2166,70 +2104,113 @@ def _run_protocol_v2_child(config: dict, workdir: Path) -> dict:
     max_containers=1,
 )
 def _protocol_v2_run(split: str, epsilon: float | None) -> dict:
-    """Runs one split (calibration or sealed holdout) of Correctness
-    Protocol V2 (see CORRECTNESS_PROTOCOL_V2.md): every request in every
-    batch is classified via experiments.protocol_v2.classify_request. When
-    epsilon is None (calibration), disagreements are left pending and
-    experiments.protocol_v2.propose_epsilon is applied at the end."""
+    """Retain the entire V2 split; holdout reruns are exposed regression evidence."""
+    import math
+
     from transformers import AutoTokenizer
 
+    from experiments.controlled import environment as environment_metadata
     from experiments.protocol_v2 import (
+        V2_BATCHES_PER_CELL,
         V2_CELLS,
         build_split_batches,
         classify_request,
         propose_epsilon,
         summarize,
     )
+    from experiments.sentinel_pilot import gpu_state_snapshot, resolved_dependency_versions
 
+    if split not in ("calibration", "holdout"):
+        raise ValueError(f"unknown V2 split: {split}")
+    if epsilon is not None and (not math.isfinite(epsilon) or epsilon < 0):
+        raise ValueError("epsilon must be finite and nonnegative")
+    if split == "holdout" and epsilon is None:
+        raise ValueError("holdout regression requires the committed epsilon")
     _print_run_header(f"correctness protocol v2: {split}")
     model_dir = _prepare_weights(RAGGED_MODEL)
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
     batches_by_cell = build_split_batches(tokenizer, split)
-
-    # One fresh subprocess per (implementation, cell, batch) -- not one
-    # subprocess looping over several engine constructions, which hit a real
-    # CUDA OOM after a couple of iterations (PyTorch's allocator did not
-    # return the prior engine's memory before the next one allocated).
+    expected_total = sum(V2_BATCHES_PER_CELL[cell.concurrency] * cell.concurrency for cell in V2_CELLS)
+    if (set(batches_by_cell) != {cell.name for cell in V2_CELLS}
+            or any(len(batches_by_cell[cell.name]) != V2_BATCHES_PER_CELL[cell.concurrency]
+                   or any(len(batch) != cell.concurrency or any(len(ids) != cell.input_tokens for ids in batch)
+                          for batch in batches_by_cell[cell.name]) for cell in V2_CELLS)):
+        raise ValueError("materialized V2 workload does not match the fixed protocol")
+    model_hashes = {}
+    for path in sorted(Path(model_dir).rglob("*")):
+        if path.is_file():
+            digest = sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            model_hashes[path.relative_to(model_dir).as_posix()] = digest.hexdigest()
+    cuda_version = _sentinel_torch_cuda_version()
+    result = {
+        "split": split, "epsilon": epsilon,
+        "evaluation_kind": "exposed_v2_regression" if split == "holdout" else "v2_calibration",
+        "gate_cleared": False,
+        "environment": environment_metadata(RAGGED_MODEL, tokenizer, "paired-v2-regression"),
+        "source": os.environ.get("SOURCE_COMMIT", "unknown"),
+        "resolved_dependencies": resolved_dependency_versions(),
+        "model_file_hashes": model_hashes,
+        "gpu_states": [gpu_state_snapshot(cuda_version)],
+        "batch_workloads": batches_by_cell,
+        "expected_classifications": expected_total,
+        "child_configurations": {}, "children": {}, "crashed": {}, "evidence_errors": {},
+        "classifications": [], "summary": None, "complete": False,
+    }
     workdir = Path(tempfile.mkdtemp(prefix=f"protocol-v2-{split}-"))
-    child_results: dict[str, dict] = {}
     for implementation in ("custom", "vllm"):
         for cell in V2_CELLS:
             for batch_index, batch_ids in enumerate(batches_by_cell[cell.name]):
-                config = {
-                    "implementation": implementation,
-                    "model_dir": model_dir,
-                    "batch_ids": batch_ids,
-                    "engine_options": {},
-                }
+                config = {"implementation": implementation, "model_dir": model_dir,
+                          "batch_ids": batch_ids, "engine_options": {}}
                 name = f"{implementation}_{cell.name}_{batch_index}"
-                child_results[name] = _run_protocol_v2_child(config, workdir / name)
+                child_dir = workdir / name
+                result["child_configurations"][name] = config
+                try:
+                    child = _run_protocol_v2_child(config, child_dir)
+                except Exception as exc:  # noqa: BLE001 - retain other completed children and failed logs
+                    child = {"crashed": True, "error": f"{type(exc).__name__}: {exc}"}
+                child["logs"] = {
+                    stream: (child_dir / f"{stream}.log").read_text(errors="replace")
+                    if (child_dir / f"{stream}.log").exists() else None
+                    for stream in ("stdout", "stderr")
+                }
+                result["children"][name] = child
+                result["gpu_states"].append(gpu_state_snapshot(cuda_version))
+                if child.get("crashed"):
+                    result["crashed"][name] = child
+                error = _protocol_v2_child_error(child, config)
+                if error:
+                    result["evidence_errors"][name] = error
+    uuids = {state.get("uuid") for state in result["gpu_states"]}
+    if len(uuids) != 1 or None in uuids or "" in uuids:
+        result["evidence_errors"]["gpu_identity"] = "GPU missing or changed across split"
+    if result["evidence_errors"]:
+        return result
 
-    crashed = {name: child for name, child in child_results.items() if child["crashed"]}
-    if crashed:
-        return {"split": split, "crashed": crashed, "classifications": [], "summary": None}
-
-    classifications = []
     for cell in V2_CELLS:
-        num_batches = len(batches_by_cell[cell.name])
-        for batch_index in range(num_batches):
-            custom_batch = child_results[f"custom_{cell.name}_{batch_index}"]["result"]["result"]
-            vllm_batch = child_results[f"vllm_{cell.name}_{batch_index}"]["result"]["result"]
+        for batch_index in range(V2_BATCHES_PER_CELL[cell.concurrency]):
+            custom_batch = result["children"][f"custom_{cell.name}_{batch_index}"]["result"]["result"]
+            vllm_batch = result["children"][f"vllm_{cell.name}_{batch_index}"]["result"]["result"]
             for custom_request, vllm_request in zip(custom_batch, vllm_batch, strict=True):
-                entry = classify_request(custom_request, vllm_request, epsilon, concurrency=cell.concurrency)
-                entry["cell"] = cell.name
-                entry["batch_index"] = batch_index
-                entry["concurrency"] = cell.concurrency
-                classifications.append(entry)
-
-    result = {
-        "split": split,
-        "epsilon": epsilon,
-        "crashed": {},
-        "classifications": classifications,
-        "summary": summarize(classifications),
-    }
+                try:
+                    entry = classify_request(custom_request, vllm_request, epsilon, concurrency=cell.concurrency)
+                except (KeyError, TypeError, ValueError, IndexError) as exc:
+                    key = f"{cell.name}_{batch_index}_{custom_request['index']}"
+                    result["evidence_errors"][key] = f"invalid capture: {type(exc).__name__}: {exc}"
+                    continue
+                entry.update(cell=cell.name, batch_index=batch_index, concurrency=cell.concurrency,
+                             index_in_batch=custom_request["index"])
+                result["classifications"].append(entry)
+    if len(result["classifications"]) != expected_total:
+        result["evidence_errors"]["classification_count"] = "incomplete classification count"
+        return result
+    result["summary"] = summarize(result["classifications"])
+    result["complete"] = result["summary"]["total"] == expected_total
     if epsilon is None:
-        result["proposed_epsilon"] = propose_epsilon(classifications)
+        result["proposed_epsilon"] = propose_epsilon(result["classifications"])
     return result
 
 
@@ -2237,24 +2218,23 @@ def _protocol_v2_run(split: str, epsilon: float | None) -> dict:
 def protocol_v2_calibration(
     output: str = "experiments/sentinel-pilot/summaries/protocol-v2-calibration.json",
 ) -> None:
-    """Correctness Protocol V2, calibration split only. Proposes an epsilon;
-    does NOT commit it and does NOT run the sealed holdout set. See
-    CORRECTNESS_PROTOCOL_V2.md requirements 6, 7, 9."""
+    """V2 calibration only; retained historical output cannot be overwritten."""
+    manifest = _protocol_v2_preflight(output, None, require_frozen=False)
     result = _protocol_v2_run.remote("calibration", None)
+    result["source_manifest"] = manifest
+    if result["source"] != manifest["source_fingerprint"]:
+        result["complete"] = False
+        result["evidence_errors"]["source"] = "executed image does not match the local source manifest"
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(result, indent=2))
-    if result["crashed"]:
-        print(f"calibration CRASHED: {list(result['crashed'])}")
-        return
+    with destination.open("x") as handle:
+        json.dump(result, handle, indent=2)
+    if not result["complete"]:
+        raise SystemExit(f"calibration incomplete; all returned evidence retained at {destination}")
     print(f"calibration written to {destination}")
     print(json.dumps(result["summary"], indent=2))
     print("proposed epsilon:", json.dumps(result["proposed_epsilon"], indent=2))
-    print(
-        "This epsilon is NOT committed. Review it, then commit it explicitly "
-        "(e.g. into CORRECTNESS_PROTOCOL_V2.md or a companion file) before "
-        "running protocol_v2_holdout with it."
-    )
+    print("Calibration is not a gate result. The historical committed V2 epsilon is unchanged.")
 
 
 @app.local_entrypoint()
@@ -2262,29 +2242,26 @@ def protocol_v2_holdout(
     epsilon: float,
     output: str = "experiments/sentinel-pilot/summaries/protocol-v2-holdout.json",
 ) -> None:
-    """Correctness Protocol V2, sealed holdout split only. `epsilon` must be
-    a value already committed to source control (requirement 9) -- this
-    entrypoint does not check that itself, it only refuses to derive
-    epsilon from the holdout data (epsilon is a required argument, not
-    computed here)."""
+    """Rerun the exposed V2 holdout as regression, never a fresh sealed gate."""
+    manifest = _protocol_v2_preflight(output, epsilon, require_frozen=True)
     result = _protocol_v2_run.remote("holdout", epsilon)
+    result["source_manifest"] = manifest
+    if result["source"] != manifest["source_fingerprint"]:
+        result["complete"] = False
+        result["evidence_errors"]["source"] = "executed image does not match the local source manifest"
     destination = Path(output)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json.dumps(result, indent=2))
-    if result["crashed"]:
-        print(f"holdout CRASHED: {list(result['crashed'])}")
-        return
-    print(f"holdout written to {destination}")
+    with destination.open("x") as handle:
+        json.dump(result, handle, indent=2)
+    if not result["complete"]:
+        raise SystemExit(f"V2 regression incomplete; all returned evidence retained at {destination}")
+    print(f"exposed V2 regression written to {destination}")
     print(json.dumps(result["summary"], indent=2))
-    gate_passes = (
-        result["summary"]["hard_failures"] == 0
-        and result["summary"]["pending_epsilon"] == 0
-    )
-    print(f"CORRECTNESS_PROTOCOL_V2.md requirement 10 gate: {'PASSES' if gate_passes else 'DOES NOT PASS'}")
-    print(
-        "This does not by itself resume the 10-pair performance protocol -- "
-        "that remains a separate, explicit decision."
-    )
+    passed = result["summary"]["hard_failures"] == 0 and result["summary"]["pending_epsilon"] == 0
+    print(f"Exposed V2 regression: {'PASSES' if passed else 'FAILS'}; correctness gate remains stopped.")
+    print("A fresh committed holdout and full pilot are required before clearing the gate.")
+    if not passed:
+        raise SystemExit("V2 regression failed; evidence retained")
 
 
 @app.function(

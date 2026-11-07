@@ -331,7 +331,10 @@ def run_custom(model_dir: str, model: dict[str, Any], operation: str, variant: s
 def _vllm_engine(model_dir: str, model: dict[str, Any], prefix_reuse: bool):
     from vllm import EngineArgs, LLMEngine
 
+    from cloud_engine.precision import require_vllm_precision
+
     args = EngineArgs(
+        worker_extension_cls="cloud_engine.vllm_precision_worker.PrecisionWorker",
         model=model_dir,
         tokenizer=model_dir,
         dtype="half",
@@ -346,7 +349,9 @@ def _vllm_engine(model_dir: str, model: dict[str, Any], prefix_reuse: bool):
         trust_remote_code=False,
         seed=0,
     )
-    return LLMEngine.from_engine_args(args)
+    engine = LLMEngine.from_engine_args(args)
+    require_vllm_precision(engine)
+    return engine
 
 
 def _record_vllm_step(state: dict[str, dict[str, Any]], outputs: list[Any], stamp: float) -> None:

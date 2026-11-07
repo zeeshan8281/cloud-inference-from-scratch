@@ -850,3 +850,18 @@ weights retain their own licenses:
 Contributions should keep the comparison honest: run the local suite, attach a
 correctness case for behavior changes, attach raw JSON for performance claims,
 and never weaken or selectively omit a workload to make a gate pass.
+
+### Numerical divergence debugger
+
+Run a bounded replay of the stopped sentinel's original c8 request, including
+submission-order, solo, repeatability, and shared-prefix re-prefill comparisons:
+
+```bash
+modal run debugger_app.py::numerical_debugger --output experiments/numerical-debugger/my-run
+```
+
+This isolated Modal app runs the existing pinned diagnostic stack on a real L4
+without starting the API. It saves raw captures plus JSON, Markdown and HTML
+reports. Comparisons stop at the first disagreement; missing/non-finite captures
+are not treated as passes. The original stopped pilot and V2 gate remain unchanged.
+See [scope and reproduction details](experiments/numerical-debugger/README.md).

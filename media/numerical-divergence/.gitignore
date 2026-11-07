@@ -1,0 +1,6 @@
+node_modules/
+*.mp4
+*.wav
+*.png
+*.jpg
+*.log

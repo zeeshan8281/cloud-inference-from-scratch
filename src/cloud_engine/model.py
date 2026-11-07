@@ -27,6 +27,7 @@ from .attention import (
     build_rope_cache,
     rms_norm,
 )
+from .precision import configure_inference_precision
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,7 @@ class Qwen2CausalLM(nn.Module):
         self, dims: ModelDims, attn_backend: AttentionBackend, dtype: Any, device: str
     ) -> None:
         super().__init__()
+        configure_inference_precision()
         self.dims = dims
         self.attn_backend = attn_backend
         self.embed_tokens = nn.Embedding(
@@ -223,9 +225,12 @@ class Qwen2CausalLM(nn.Module):
             selected = hidden.index_select(0, logit_indices)
         else:
             selected = hidden if return_all_logits else hidden[-1:]
+        return self.project_logits(selected)
+
+    def project_logits(self, hidden: Any) -> Any:
+        """Output projection seam; unsupported policies retain the original FP32 math."""
         output_weight = self.embed_tokens.weight if self.lm_head is None else self.lm_head.weight
-        logits = _torch.mm(selected.to(_torch.float32), output_weight.to(_torch.float32).t())
-        return logits
+        return _torch.mm(hidden.to(_torch.float32), output_weight.to(_torch.float32).t())
 
 
 def greedy_sample(logits: Any) -> int:
