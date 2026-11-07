@@ -137,7 +137,7 @@ else:
         output = torch.empty((m, n), device=x.device, dtype=x.dtype)
         torch.library.wrap_triton(_fixed_qkv)[(triton.cdiv(m, BLOCK_M), triton.cdiv(n, BLOCK_N))](
             x, weight, bias, output, m, n, k, BLOCK_M, BLOCK_N, BLOCK_K,
-            num_warps=NUM_WARPS, num_stages=NUM_STAGES)
+            HAS_BIAS=True, OUTPUT_FP32=False, num_warps=NUM_WARPS, num_stages=NUM_STAGES)
         return output
 
 
@@ -152,7 +152,7 @@ else:
         output = torch.empty((m, n), device=x.device, dtype=x.dtype)
         torch.library.wrap_triton(_fixed_qkv)[(triton.cdiv(m, BLOCK_M), triton.cdiv(n, BLOCK_N))](
             x, weight, weight if bias is None else bias, output, m, n, k, BLOCK_M, BLOCK_N, BLOCK_K,
-            HAS_BIAS=bias is not None, num_warps=NUM_WARPS, num_stages=NUM_STAGES)
+            HAS_BIAS=bias is not None, OUTPUT_FP32=False, num_warps=NUM_WARPS, num_stages=NUM_STAGES)
         return output
 
 

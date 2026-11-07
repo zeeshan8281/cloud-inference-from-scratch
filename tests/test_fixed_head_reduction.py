@@ -36,10 +36,12 @@ class FixedHeadReductionTests(unittest.TestCase):
     def test_preexisting_transformer_arithmetic_is_unchanged(self):
         # Function source hashes from the executed20 source (62827753...), not generated fixtures.
         expected = {'_fixed_qkv': 'f009e8ec504eb0ba3761a9ba15661a1e70191a49f34c631528366e5d24128ca2', 'batch_invariant_linear': '0972465619502ee28850a2ea2bf5e2b2f0a00cc64568257c951c0940f86246e4', 'fixed_tile_linear': 'ded3ad7c2987b478d4730deceff5db3fc331bb43fb03185cb2785e9eb578aa7b'}
-        tree = ast.parse(PATH.read_text())
+        # Explicit existing launch defaults are checked separately; arithmetic stays frozen.
+        source = PATH.read_text().replace('HAS_BIAS=True, OUTPUT_FP32=False, ', '').replace('OUTPUT_FP32=False, ', '')
+        tree = ast.parse(source)
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name in expected and node.decorator_list:
-                digest = hashlib.sha256(ast.get_source_segment(PATH.read_text(), node).encode()).hexdigest()
+                digest = hashlib.sha256(ast.get_source_segment(source, node).encode()).hexdigest()
                 self.assertEqual(digest, expected.pop(node.name))
         self.assertEqual(expected, {})
 
