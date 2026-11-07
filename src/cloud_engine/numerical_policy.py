@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 from types import MethodType
 
-POLICY_ID = 'fixed_tile_linears_fp32_head_opaque_rmsnorm_fa2_min_query2_v3'
+POLICY_ID = 'fixed_tile_linears_fp32_head_opaque_rmsnorm_shared_attention_v4'
 NORMALIZATION_ID = 'custom_fp32_rmsnorm_fp16_residual'
 _STATE_ATTRIBUTE = '_cloud_numerical_policy_installation'
 _FLOOR = None
@@ -149,9 +149,9 @@ def _normalization_status(records):
             'active': active, 'parameter_identity_preserved': preserved}
 
 
-def _record(model, implementation, wrappers, parameters, expected, links=(), norms=(), norm_operator=None):
+def _record(model, implementation, wrappers, parameters, expected, links=(), norms=(), norm_operator=None, attention=None):
     # The model owns its record. No global value may keep a GPU model alive.
-    setattr(model, _STATE_ATTRIBUTE, (implementation, wrappers, parameters, expected, links, norms, norm_operator))
+    setattr(model, _STATE_ATTRIBUTE, (implementation, wrappers, parameters, expected, links, norms, norm_operator, attention))
     return policy_status(model)
 
 
@@ -159,7 +159,7 @@ def policy_status(model):
     state = getattr(model, _STATE_ATTRIBUTE, None)
     if state is None:
         return _unsupported('unknown', 'policy not installed on this model')
-    implementation, wrappers, parameters, expected, links, norms, norm_operator = state
+    implementation, wrappers, parameters, expected, links, norms, norm_operator, attention = state
     active = (all(getattr(owner, name) is function for owner, name, function in wrappers)
               and all(owner.quant_method is method for owner, method in links))
     preserved = all(getattr(owner, name) is parameter and str(parameter.dtype) == 'torch.float16'
@@ -174,12 +174,16 @@ def policy_status(model):
                                and len(norms) == 73 and all(record[-1] is operator for record in norms))
         normalization.update(compile_boundary='opaque_custom_op', operator='cloud_engine::common_rms_norm',
                              operator_active=operator_active)
+    attention_status = {'implementation': 'shared_ragged_paged_attention_v1', 'active': False, 'count': 0, 'expected_count': 36}
+    if attention is not None:
+        owner, record = attention
+        attention_status = owner.status(record)
     return {'installed': True, 'policy_id': POLICY_ID, 'implementation': implementation,
             'linears_count': len(wrappers)-1, 'expected_linears': expected,
             'head_installed': active, 'wrappers_active': active, 'parameters_preserved': preserved,
             'storage_dtype': 'torch.float16', 'output_dtype': 'torch.float32',
             'metadata_floor': metadata_floor_status(),
-            'normalization': normalization,
+            'normalization': normalization, 'attention': attention_status,
             'evidence_scope': 'actual callable and parameter identity; execution/dtypes validated by capture'}
 
 
@@ -215,7 +219,9 @@ def install_custom_policy(model):
         raise ValueError('custom layer count mismatch')
     _validate_parameter(head, (151936,2048), False, torch)
     norms, eps_name = _validate_norms(model, 'custom', model.dims.rms_norm_eps, torch)
+    from . import common_attention
     from .attention import rms_norm
+    attention = common_attention.custom_record(model)
     from .precision import configure_numerical_policy_precision
     configure_numerical_policy_precision()
     wrappers, parameters = [], []
@@ -233,7 +239,8 @@ def install_custom_policy(model):
     wrappers.append((model, 'project_logits', project_logits))
     parameters.append((head, 'weight', head.weight))
     return _record(model, 'custom', wrappers, parameters, 252,
-                   norms=_normalization_records(norms, eps_name, rms_norm))
+                   norms=_normalization_records(norms, eps_name, rms_norm),
+                   attention=(common_attention, attention))
 
 
 def install_vllm_policy(model, model_config, parallel_config):
@@ -242,7 +249,9 @@ def install_vllm_policy(model, model_config, parallel_config):
     import torch
     import vllm
     from vllm.model_executor.layers.linear import UnquantizedLinearMethod
-    from vllm.model_executor.layers.vocab_parallel_embedding import UnquantizedEmbeddingMethod
+    from vllm.model_executor.layers.vocab_parallel_embedding import (
+        UnquantizedEmbeddingMethod,
+    )
 
     from .batch_invariant_linear import fixed_tile_head, fixed_tile_linear
     if vllm.__version__ != '0.10.0' or not vllm_scope(model_config, parallel_config):
@@ -267,7 +276,8 @@ def install_vllm_policy(model, model_config, parallel_config):
         raise ValueError('vLLM layer count mismatch')
     _validate_parameter(head, (151936,2048), False, torch)
     norms, eps_name = _validate_norms(model, 'vllm', model_config.hf_config.rms_norm_eps, torch)
-    from . import opaque_normalization
+    from . import common_attention, opaque_normalization
+    attention_modules = common_attention.validate_model(model)
     from .attention import rms_norm
     from .precision import configure_numerical_policy_precision
     configure_numerical_policy_precision()
@@ -295,7 +305,8 @@ def install_vllm_policy(model, model_config, parallel_config):
     links.append((head, method))
     wrappers.append((method, 'apply', bound))
     parameters.append((head, 'weight', head.weight))
-    install_pinned_fa2_metadata_policy()
+    attention = common_attention.install_model(attention_modules)
     return _record(model, 'vllm', wrappers, parameters, 144, links,
                    _normalization_records(norms, eps_name, opaque_normalization.opaque_rms_norm, replace=True),
-                   (opaque_normalization, opaque_normalization.opaque_rms_norm, rms_norm))
+                   (opaque_normalization, opaque_normalization.opaque_rms_norm, rms_norm),
+                   (common_attention, attention))

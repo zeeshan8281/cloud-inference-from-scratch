@@ -41,7 +41,7 @@ def require_vllm_precision(engine) -> list[dict[str, bool]]:
 
 def require_numerical_policy(status: dict, implementation: str) -> dict:
     expected = {"custom": 252, "vllm": 144}.get(implementation)
-    if (expected is None or status.get("policy_id") != "fixed_tile_linears_fp32_head_opaque_rmsnorm_fa2_min_query2_v3"
+    if (expected is None or status.get("policy_id") != "fixed_tile_linears_fp32_head_opaque_rmsnorm_shared_attention_v4"
             or status.get("implementation") != implementation or status.get("installed") is not True
             or status.get("linears_count") != expected or status.get("expected_linears") != expected
             or any(status.get(key) is not True for key in ("head_installed", "wrappers_active", "parameters_preserved"))
@@ -57,11 +57,15 @@ def require_numerical_policy(status: dict, implementation: str) -> dict:
     if ((normalization.get("compile_boundary"), normalization.get("operator"), normalization.get("operator_active")) != boundary
             or (implementation == "vllm" and normalization.get("operator_active") is not True)):
         raise ValueError("actual normalization compile boundary missing or changed")
-    if implementation == "vllm":
-        floor = status.get("metadata_floor", {})
-        if (floor.get("installed") is not True or floor.get("active") is not True
-                or floor.get("pinned_version") != "0.10.0" or floor.get("fa_version") != 2):
-            raise ValueError("actual pinned FA2 metadata policy missing or changed")
+    attention = status.get("attention")
+    if (not isinstance(attention, dict) or attention.get("implementation") != "shared_ragged_paged_attention_v1"
+            or attention.get("active") is not True or attention.get("count") != 36
+            or attention.get("expected_count") != 36 or attention.get("block_size") != 16
+            or attention.get("head_dim") != 128 or attention.get("arithmetic") != "existing_ragged_paged_attention"):
+        raise ValueError("actual shared attention policy missing or changed")
+    if implementation == "vllm" and (attention.get("metadata_active") is not True
+                                      or attention.get("pinned_version") != "0.10.0"):
+        raise ValueError("actual shared attention metadata policy missing or changed")
     if status.get("precision") != {"allow_fp16_reduced_precision_reduction": False, "allow_tf32": False,
                                    "float32_matmul_precision": "highest"}:
         raise ValueError("actual shared arithmetic settings missing or changed")

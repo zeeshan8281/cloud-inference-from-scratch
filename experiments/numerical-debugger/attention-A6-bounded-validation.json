@@ -1,0 +1,74 @@
+{
+  "schema": "bounded-common-attention-validation-v1",
+  "scope": "Four primitive cases and exposed resource-normalized pair09; not full calibration or gate clearance",
+  "core_sha256": "ff2bdd7c3dd63e54b0995df61006a48ad8d0166d17cf4ab3129d47ad04d62593",
+  "campaign_id": "ccd83e18ec65456796daa8dcc34448ba",
+  "call_id": "fc-01M6SPD4Z7X44KQVE64760MNAY",
+  "app_id": "ap-fuYrPg5BR1lTuVWNWQvRQa",
+  "gpu_uuid": "GPU-0daa4d70-e2f3-982b-5326-9abf8e02ea4a",
+  "evidence_volume": "cie-retained-diagnostics",
+  "artifacts": {
+    "input.json": "dad91d2f8af9c10a9cdf98a5a67182ea7ee5eb545823c054c3413c4a0246cdb0",
+    "micro.json": "2c2567e396a2f939d1ee9ed004b4d1a9b879ee9098c0414d2b6ed85c2d42422f",
+    "pair.json": "6625de86572f61f5588c5c6e7c1e422fedf820304c8d72fe8b6afcead4993126"
+  },
+  "independent_audit_sha256": "b1e740fb3ccd36d263e6c8061b2be977890dfb4058a1651d5af1e6dae0d7561f",
+  "micro_cases": 4,
+  "micro_paths": [
+    "eager",
+    "compiled_fullgraph",
+    "direct_cuda_graph"
+  ],
+  "windows_per_engine": 64,
+  "output_tokens_per_window": 128,
+  "comparisons": [
+    {
+      "kind": "batch_solo",
+      "engine": "custom",
+      "count": 32,
+      "exact_tokens": true,
+      "max_logprob_drift": 0.26795005798339844,
+      "min_top_k_overlap": 0.95
+    },
+    {
+      "kind": "batch_solo",
+      "engine": "vllm",
+      "count": 32,
+      "exact_tokens": true,
+      "max_logprob_drift": 0.26795005798339844,
+      "min_top_k_overlap": 0.95
+    },
+    {
+      "kind": "cross_engine_batch",
+      "engine": null,
+      "count": 32,
+      "exact_tokens": true,
+      "max_logprob_drift": 0.009299278259277344,
+      "min_top_k_overlap": 0.95
+    },
+    {
+      "kind": "cross_engine_solo",
+      "engine": null,
+      "count": 32,
+      "exact_tokens": true,
+      "max_logprob_drift": 0.0,
+      "min_top_k_overlap": 1.0
+    }
+  ],
+  "gate_cleared": false,
+  "remaining": [
+    "Full calibration in both modes",
+    "Original exposed V2 regression",
+    "Frozen bounds and disjoint fresh holdout",
+    "Full twenty-pair sentinel pilot"
+  ],
+  "limits": [
+    "Token agreement does not imply bitwise batch invariance",
+    "Full-model comparison is eager; direct primitive graphs do not prove complete-system model graphs"
+  ],
+  "full_calibration_successor": {
+    "core_sha256": "0acf88a036852be5fed647654f8e2aafa37053584210a90b8bf41be5d56aee59",
+    "change": "Restore original protocol_v2 import ordering/spacing only; non-import AST unchanged",
+    "gpu_validation": "Pending full calibration; bounded receipt above applies to its original exact source"
+  }
+}

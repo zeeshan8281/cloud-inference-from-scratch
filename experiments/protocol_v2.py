@@ -397,7 +397,7 @@ def validate_execution_evidence(evidence: dict, implementation: str) -> None:
         if not isinstance(snapshot, dict):
             raise ValueError("malformed execution snapshot")
         policy = snapshot.get("numerical_policy")
-        if not isinstance(policy, dict) or (implementation == "vllm" and not isinstance(policy.get("metadata_floor"), dict)):
+        if not isinstance(policy, dict) or (implementation == "vllm" and not isinstance(policy.get("attention"), dict)):
             raise ValueError("malformed numerical policy evidence")
         require_numerical_policy(policy, implementation)
         graphs = snapshot.get("graphs")

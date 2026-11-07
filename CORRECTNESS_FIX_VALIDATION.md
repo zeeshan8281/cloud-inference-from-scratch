@@ -2,15 +2,21 @@
 
 **Status: DRAFT — NOT EXECUTED. No fresh holdout prompts have been materialized.**
 
-This protocol will test the combined numerical policy now integrated into both inference paths. The implementation is a candidate awaiting real GPU validation; integration and local tests do not validate it or clear the gate. The existing reduction-policy setting alone is not the completed fix. It does not widen the historical V2 epsilon, reinterpret old results, or claim Protocol V3 execution. The original sentinel pilot and V2 holdout remain stopped. Gate clearance requires both the fresh evaluation below and the complete twenty-pair sentinel pilot.
+This protocol will test the combined numerical policy now integrated into both inference paths. The implementation is a candidate awaiting full validation. Real L4 primitive checks and the exposed c32 pair09 pass under computational source ff2bdd7c3dd63e54b0995df61006a48ad8d0166d17cf4ab3129d47ad04d62593; this bounded result does not clear the gate. See experiments/numerical-debugger/attention-A6-bounded-validation.json. The existing reduction-policy setting alone is not the completed fix. It does not widen the historical V2 epsilon, reinterpret old results, or claim Protocol V3 execution. The original sentinel pilot and V2 holdout remain stopped. Gate clearance requires both the fresh evaluation below and the complete twenty-pair sentinel pilot.
 
-The integrated candidate is `fixed_tile_linears_fp32_head_opaque_rmsnorm_fa2_min_query2_v3`: fixed
+The integrated candidate is `fixed_tile_linears_fp32_head_opaque_rmsnorm_shared_attention_v4`: fixed
 16 x 64 x 32 matrix tiles with FP32 accumulation and FP16 outputs for transformer
 projections. The output head uses fixed tiles of four vocabulary rows and all
 2048 reduction elements: FP32 products, a fixed FP64 tree sum, and one final
 FP32 output conversion without an intervening FP16 rounding step.
-The pinned vLLM 0.10.0 FlashAttention 2 path floors the legal `max_query_len`
-upper bound from 1 to 2 while preserving actual query offsets and KV contents.
+The pinned vLLM 0.10.0 attention methods reuse the existing custom ragged
+paged-attention kernel with unchanged reduction arithmetic. Native KV appends,
+output aliases, real query schedules and prefix-cache pages are preserved.
+Per-query IDs and positions are derived once from validated CPU scheduler
+metadata into stable device buffers. Actual attention and metadata callable
+identities are checked at phase boundaries. The prior FA2 max-query floor is
+not installed by this candidate. Supported piecewise compilation/CUDA graphs
+remain enabled; native FA2 full-attention CUDA graphs remain unsupported.
 All 73 normalization sites use the custom engine's FP32 mean-square/rsqrt,
 FP16 normalized-value rounding, then learned FP16 weight multiplication.
 The vLLM residual path materializes the FP16 residual sum before normalization

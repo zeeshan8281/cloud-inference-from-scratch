@@ -28,7 +28,7 @@ def precision_module():
 
 def status(implementation='custom'):
     count = 252 if implementation == 'custom' else 144
-    return {'installed': True, 'policy_id': 'fixed_tile_linears_fp32_head_opaque_rmsnorm_fa2_min_query2_v3',
+    return {'installed': True, 'policy_id': 'fixed_tile_linears_fp32_head_opaque_rmsnorm_shared_attention_v4',
             'implementation': implementation, 'linears_count': count, 'expected_linears': count,
             'head_installed': True, 'wrappers_active': True, 'parameters_preserved': True,
             'storage_dtype': 'torch.float16', 'output_dtype': 'torch.float32',
@@ -39,7 +39,10 @@ def status(implementation='custom'):
                               'operator_active':True if implementation == 'vllm' else None},
             'precision': {'allow_fp16_reduced_precision_reduction': False, 'allow_tf32': False,
                           'float32_matmul_precision': 'highest'},
-            'metadata_floor': {'installed': True, 'active': True, 'pinned_version': '0.10.0', 'fa_version': 2}}
+            'attention': {'implementation':'shared_ragged_paged_attention_v1','active':True,'count':36,'expected_count':36,
+                          'block_size':16,'head_dim':128,'arithmetic':'existing_ragged_paged_attention',
+                          'metadata_active':True if implementation == 'vllm' else None,
+                          'pinned_version':'0.10.0' if implementation == 'vllm' else None}}
 
 
 class LifecycleTests(unittest.TestCase):
@@ -119,8 +122,15 @@ class PolicyGuardTests(unittest.TestCase):
             altered['normalization'] = normalization
             with self.subTest(normalization=normalization), self.assertRaises(ValueError):
                 module.require_numerical_policy(altered, 'vllm')
+        for attention in (None, {}, {**status()['attention'], 'count':35},
+                          {**status()['attention'], 'active':False},
+                          {**status()['attention'], 'arithmetic':'other'}):
+            altered = status('vllm')
+            altered['attention'] = attention
+            with self.subTest(attention=attention), self.assertRaises(ValueError):
+                module.require_numerical_policy(altered, 'vllm')
         altered = status('vllm')
-        altered['metadata_floor']['active'] = False
+        altered['attention']['metadata_active'] = False
         with self.assertRaises(ValueError):
             module.require_numerical_policy(altered, 'vllm')
         altered = status()

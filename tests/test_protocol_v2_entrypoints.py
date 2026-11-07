@@ -193,7 +193,7 @@ class TestV2Evidence(unittest.TestCase):
                          lambda r: r["execution_evidence"]["after"].update(graphs=[])]
             if implementation == "vllm":
                 mutations.append(lambda r: r["execution_evidence"]["after"]["graphs"][0].update(observer_active=False))
-                mutations.append(lambda r: r["execution_evidence"]["after"]["numerical_policy"].update(metadata_floor=None))
+                mutations.append(lambda r: r["execution_evidence"]["after"]["numerical_policy"].update(attention=None))
             for mutate in mutations:
                 invalid = copy.deepcopy(child)
                 mutate(invalid["result"]["result"][0])
